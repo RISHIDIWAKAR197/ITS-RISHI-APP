@@ -4,7 +4,7 @@ import requests
 from nselib import capital_market
 
 # Set up browser tab properties
-st.set_page_config(page_title="Mohit's Intraday Dashboard", page_icon="📊", layout="centered")
+st.set_page_config(page_title="RISHI's Intraday Dashboard", page_icon="📊", layout="centered")
 
 def safe_price(val):
     try:
