@@ -13,7 +13,7 @@ def safe_price(val):
         return 0.0
 
 # 🎨 App Branding Header
-st.title("📊 Mohit's Momentum Dashboard")
+st.title("📊 RISHI's Momentum Dashboard")
 st.caption(f"Live Market Analysis Engine • System Time: {datetime.now().strftime('%d %b %Y | %H:%M IST')}")
 st.markdown("---")
 
