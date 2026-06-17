@@ -36,21 +36,46 @@ buying_power = capital * leverage
 st.info(f"Total Buying Power Available: **₹{buying_power:,}**")
 st.markdown("---")
 
-# 🚀 Real-time Live execution logic triggered on Page Access or Click
-try:
-    # Fetching data using correct capitalized parameters
-    gainers_df = capital_market.get_top_gainers_losers(type='Gainers')
-    losers_df = capital_market.get_top_gainers_losers(type='Losers')
-    
-    bullish_stock = gainers_df.iloc[0]['symbol']
-    bullish_ltp = safe_price(gainers_df.iloc[0]['ltp'])
-    
-    bearish_stock = losers_df.iloc[0]['symbol']
-    bearish_ltp = safe_price(losers_df.iloc[0]['ltp'])
-except Exception as e:
-    st.warning("⚠️ Live NSE Feed busy or closed. Displaying backup fallback data placeholders.")
-    bullish_stock, bullish_ltp = "MARKET BAND HAI LEVEL KE BINA SITE CRASH HO JAYEGI", 780.00
-    bearish_stock, bearish_ltp = "KAL AANA 9:15 SE 9:30 KE BEECH", 490.00
+# 🚀 Real-time Live execution logic with Manual Overrides
+st.subheader("📡 Live Market Feed")
+
+# Create two tabs: One for Auto, one for Manual fallback
+tab_auto, tab_manual = st.tabs(["🤖 Automated Scanner", "✍️ Manual Entry Override"])
+
+with tab_auto:
+    try:
+        # Fixed: Correct library function name and specific backend spelling parameters
+        gainers_df = capital_market.top_gainers_or_losers(to_get='gainers')
+        losers_df = capital_market.top_gainers_or_losers(to_get='loosers')
+        
+        auto_bullish_stock = gainers_df.iloc[0]['symbol']
+        auto_bullish_ltp = safe_price(gainers_df.iloc[0]['ltp'])
+        
+        auto_bearish_stock = losers_df.iloc[0]['symbol']
+        auto_bearish_ltp = safe_price(losers_df.iloc[0]['ltp'])
+        st.success(f"✅ Live NSE Data Connected! Top Gainer: {auto_bullish_stock} | Top Loser: {auto_bearish_stock}")
+    except Exception as e:
+        st.error("⚠️ NSE Automated Feed is busy or closed. Please use the 'Manual Entry Override' tab to type your stock!")
+        auto_bullish_stock, auto_bullish_ltp = "SBIN", 780.00
+        auto_bearish_stock, auto_bearish_ltp = "WIPRO", 490.00
+
+with tab_manual:
+    st.caption("If the automated scanner fails, check your broker app's top gainers and type them manually:")
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        man_bullish = st.text_input("Top Gainer Symbol", value=auto_bullish_stock)
+        man_bullish_ltp = st.number_input("Gainer Live Price (₹)", value=auto_bullish_ltp, step=0.05)
+    with col_m2:
+        man_bearish = st.text_input("Top Loser Symbol", value=auto_bearish_stock)
+        man_bearish_ltp = st.number_input("Loser Live Price (₹)", value=auto_bearish_ltp, step=0.05)
+
+# Direct data handling
+bullish_stock = man_bullish
+bullish_ltp = man_bullish_ltp
+bearish_stock = man_bearish
+bearish_ltp = man_bearish_ltp
+
+st.markdown("---")
 
 # Math Calculations based on inputs
 long_entry = round(bullish_ltp * 1.002, 2)
@@ -94,4 +119,5 @@ s_col_t2.metric("🎯 Target 2 (1:3 RR)", f"₹{short_target2}")
 st.caption(f"*Approx. margin required:* ₹{round((short_entry * short_qty)/5, 2)}")
 
 st.markdown("---")
+st.warning("⚠️ **Execution Guardrail:** Manually configure these setups as **SL-Limit (MIS)** orders directly on your broker platform.")
 st.warning("⚠️ **Execution Guardrail:** Manually configure these setups as **SL-Limit (MIS)** orders directly on your broker platform.")
