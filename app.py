@@ -37,40 +37,35 @@ st.info(f"Total Buying Power Available: **₹{buying_power:,}**")
 st.markdown("---")
 
 # 🚀 Real-time Live execution logic with Manual Overrides
-st.subheader("📡 Nifty 50 Live Market Feed")
+st.subheader("📡 Nifty Live Market Feed")
 
-# Step 1: Pre-define fallback variables cleanly so they are always available to the manual inputs
+# Pre-define fallback variables cleanly so they are always available to the manual inputs
 auto_bullish_stock, auto_bullish_ltp = "SBIN", 780.00
 auto_bearish_stock, auto_bearish_ltp = "WIPRO", 490.00
 
 # Create two tabs: One for Auto, one for Manual fallback
-tab_auto, tab_manual = st.tabs(["🤖 Automated Nifty 50 Scanner", "✍️ Manual Entry Override"])
+tab_auto, tab_manual = st.tabs(["🤖 Automated Nifty Scanner", "✍️ Manual Entry Override"])
 
 with tab_auto:
     try:
-        # Fetch the entire Nifty 50 real-time sheet
-        nifty50_df = capital_market.nifty_fifty_equity_market()
+        # Fixed: Using the verified, official nselib core functions
+        gainers_df = capital_market.top_gainers_or_losers(to_get='gainers')
+        losers_df = capital_market.top_gainers_or_losers(to_get='loosers')
         
-        # Clean the percentage change column to safely sort numerically
-        nifty50_df['pChange'] = nifty50_df['pChange'].astype(str).str.replace(',', '').str.strip().astype(float)
+        # Extract Top High-Volume Gainer
+        auto_bullish_stock = gainers_df.iloc[0]['symbol']
+        auto_bullish_ltp = safe_price(gainers_df.iloc[0]['ltp'])
         
-        # Sort to find the highest gainer and lowest loser strictly within the Nifty 50 index
-        sorted_df = nifty50_df.sort_values(by='pChange', ascending=False)
+        # Extract Top High-Volume Loser
+        auto_bearish_stock = losers_df.iloc[0]['symbol']
+        auto_bearish_ltp = safe_price(losers_df.iloc[0]['ltp'])
         
-        # Extract Top Gainer
-        auto_bullish_stock = sorted_df.iloc[0]['symbol']
-        auto_bullish_ltp = safe_price(sorted_df.iloc[0]['ltp'])
-        
-        # Extract Top Loser
-        auto_bearish_stock = sorted_df.iloc[-1]['symbol']
-        auto_bearish_ltp = safe_price(sorted_df.iloc[-1]['ltp'])
-        
-        st.success(f"✅ Nifty 50 Index Connected! Top Gainer: {auto_bullish_stock} | Top Loser: {auto_bearish_stock}")
+        st.success(f"✅ Live NSE Data Connected! Top Gainer: {auto_bullish_stock} | Top Loser: {auto_bearish_stock}")
     except Exception as e:
-        st.error("⚠️ NSE Nifty 50 Feed is busy or closed. Use the 'Manual Entry Override' tab to type a stock manually!")
+        st.error("⚠️ NSE Data Feed is busy or closed. Use the 'Manual Entry Override' tab to type a stock manually!")
 
 with tab_manual:
-    st.caption("If the automated scanner fails, check your broker app's Nifty 50 tab and type them manually:")
+    st.caption("If the automated scanner fails, check your broker app's top movers list and type them manually:")
     col_m1, col_m2 = st.columns(2)
     with col_m1:
         man_bullish = st.text_input("Top Gainer Symbol", value=auto_bullish_stock)
@@ -103,7 +98,7 @@ short_target1 = round(short_entry - (short_risk * 2), 2)
 short_target2 = round(short_entry - (short_risk * 3), 2)
 
 # 📈 RENDER SYSTEM 1: LONG TRADES
-st.success(f"### 📈 NIFTY 50 LONG SETUP: {bullish_stock}")
+st.success(f"### 📈 LONG SETUP: {bullish_stock}")
 l_col1, l_col2, l_col3 = st.columns(3)
 l_col1.metric("Trigger Entry", f"₹{long_entry}")
 l_col2.metric("Stop Loss (SL)", f"₹{long_sl}")
@@ -117,7 +112,7 @@ st.caption(f"*Approx. margin required:* ₹{round((long_entry * long_qty)/5, 2)}
 st.markdown("---")
 
 # 📉 RENDER SYSTEM 2: SHORT TRADES
-st.error(f"### 📉 NIFTY 50 SHORT SETUP: {bearish_stock}")
+st.error(f"### 📉 SHORT SETUP: {bearish_stock}")
 s_col1, s_col2, s_col3 = st.columns(3)
 s_col1.metric("Trigger Entry", f"₹{short_entry}")
 s_col2.metric("Stop Loss (SL)", f"₹{short_sl}")
