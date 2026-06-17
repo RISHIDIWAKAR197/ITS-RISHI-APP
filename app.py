@@ -11,10 +11,14 @@ def safe_price(val):
         return float(str(val).replace(',', '').strip())
     except:
         return 0.0
+from datetime import datetime, timedelta
 
+# Force the server to calculate actual Indian Standard Time (UTC + 5.5 hours)
+UTC_NOW = datetime.utcnow()
+IST_NOW = UTC_NOW + timedelta(hours=5, minutes=30)
 # 🎨 App Branding Header
 st.title("📊 RISHI's Momentum Dashboard")
-st.caption(f"Live Market Analysis Engine • System Time: {datetime.now().strftime('%d %b %Y | %H:%M IST')}")
+st.caption(f"Live Market Analysis Engine • System Time: {IST_NOW.strftime('%d %b %Y | %H:%M IST')}")
 st.markdown("---")
 
 # ⚙️ Risk Parameters Config Card
