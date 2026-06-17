@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 from nselib import capital_market
 
@@ -11,11 +11,11 @@ def safe_price(val):
         return float(str(val).replace(',', '').strip())
     except:
         return 0.0
-from datetime import datetime, timedelta
 
 # Force the server to calculate actual Indian Standard Time (UTC + 5.5 hours)
 UTC_NOW = datetime.utcnow()
 IST_NOW = UTC_NOW + timedelta(hours=5, minutes=30)
+
 # 🎨 App Branding Header
 st.title("📊 RISHI's Momentum Dashboard")
 st.caption(f"Live Market Analysis Engine • System Time: {IST_NOW.strftime('%d %b %Y | %H:%M IST')}")
@@ -38,6 +38,10 @@ st.markdown("---")
 
 # 🚀 Real-time Live execution logic with Manual Overrides
 st.subheader("📡 Nifty 50 Live Market Feed")
+
+# Step 1: Pre-define fallback variables cleanly so they are always available to the manual inputs
+auto_bullish_stock, auto_bullish_ltp = "SBIN", 780.00
+auto_bearish_stock, auto_bearish_ltp = "WIPRO", 490.00
 
 # Create two tabs: One for Auto, one for Manual fallback
 tab_auto, tab_manual = st.tabs(["🤖 Automated Nifty 50 Scanner", "✍️ Manual Entry Override"])
@@ -64,8 +68,6 @@ with tab_auto:
         st.success(f"✅ Nifty 50 Index Connected! Top Gainer: {auto_bullish_stock} | Top Loser: {auto_bearish_stock}")
     except Exception as e:
         st.error("⚠️ NSE Nifty 50 Feed is busy or closed. Use the 'Manual Entry Override' tab to type a stock manually!")
-        auto_bullish_stock, auto_bullish_ltp = "SBIN", 780.00
-        auto_bearish_stock, auto_bearish_ltp = "WIPRO", 490.00
 
 with tab_manual:
     st.caption("If the automated scanner fails, check your broker app's Nifty 50 tab and type them manually:")
