@@ -45,8 +45,8 @@ try:
     bearish_ltp = safe_price(losers_df.iloc[0]['ltp'])
 except Exception as e:
     st.warning("⚠️ Live NSE Feed busy or closed. Displaying backup fallback data placeholders.")
-    bullish_stock, bullish_ltp = "SBIN", 780.00
-    bearish_stock, bearish_ltp = "WIPRO", 490.00
+    bullish_stock, bullish_ltp = "MARKET BAND HAI LEVEL KE BINA SITE CRASH HO JAYEGI", 780.00
+    bearish_stock, bearish_ltp = "KAL AANA 9:15 SE 9:30 KE BEECH", 490.00
 
 # Math Calculations based on inputs
 long_entry = round(bullish_ltp * 1.002, 2)
