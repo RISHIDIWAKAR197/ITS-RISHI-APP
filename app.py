@@ -40,8 +40,8 @@ st.markdown("---")
 st.subheader("📡 Nifty Live Market Feed")
 
 # Pre-define fallback variables cleanly so they are always available to the manual inputs
-auto_bullish_stock, auto_bullish_ltp = "SBIN", 780.00
-auto_bearish_stock, auto_bearish_ltp = "WIPRO", 490.00
+auto_bullish_stock, auto_bullish_ltp = "no stock", 00.00
+auto_bearish_stock, auto_bearish_ltp = "no stock", 00.00
 
 # Create two tabs: One for Auto, one for Manual fallback
 tab_auto, tab_manual = st.tabs(["🤖 Automated Nifty Scanner", "✍️ Manual Entry Override"])
