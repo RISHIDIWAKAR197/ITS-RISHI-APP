@@ -1,2 +1,7 @@
+streamlit
+nselib
+yfinance
+numpy
+pandas
 requests
 nselib
