@@ -54,11 +54,11 @@ st.markdown("---")
 st.subheader("⚙️ Strategy Parameters")
 col_cap, col_lev, col_risk = st.columns(3)
 with col_cap:
-    capital = st.number_input("Trading Capital (₹)", value=10000, step=1000)
+    capital = st.number_input("Trading Capital (₹)", value=30000, step=1000)
 with col_lev:
     leverage = st.number_input("MIS Leverage (x)", value=5, min_value=1, max_value=5)
 with col_risk:
-    max_risk = st.number_input("Max Risk Per Trade (₹)", value=100, step=10)
+    max_risk = st.number_input("Max Risk Per Trade (₹)", value=300, step=10)
 
 buying_power = capital * leverage
 st.info(f"Total Buying Power Available: **₹{buying_power:,}**")
