@@ -232,8 +232,8 @@ else:
     st.success(f"### 📈 STOCK FUTURES LONG: {bullish_stock}")
     l_col1, l_col2, l_col3, l_col4 = st.columns(4)
     l_col1.metric("Trigger Entry", f"₹{long_entry}")
-    l_col2.metric("Stop Loss (0.5%)", f"₹{long_sl}", delta=f"-₹{long_risk}/sh", delta_color="inverse")
-    l_col3.metric("Target (1.0%)", f"₹{long_target}", delta=f"+₹{long_reward}/sh")
+    l_col2.metric("Stop Loss (1.0%)", f"₹{long_sl}", delta=f"-₹{long_risk}/sh", delta_color="inverse")
+    l_col3.metric("Target (2.0%)", f"₹{long_target}", delta=f"+₹{long_reward}/sh")
     l_col4.metric("Max Loss Risk", f"₹{max_loss_long:,}", delta="1 Contract Lot", delta_color="inverse")
     st.caption(f"📋 **Contract Details:** Auto Lot Size: **{bull_lot_size}** units | Potential Profit: **₹{max_profit_long:,}** | Margin Check: Ensure account can accommodate contract span constraints.")
 
@@ -243,8 +243,8 @@ else:
     st.error(f"### 📉 STOCK FUTURES SHORT: {bearish_stock}")
     s_col1, s_col2, s_col3, s_col4 = st.columns(4)
     s_col1.metric("Trigger Entry", f"₹{short_entry}")
-    s_col2.metric("Stop Loss (0.5%)", f"₹{short_sl}", delta=f"+₹{short_risk}/sh", delta_color="inverse")
-    s_col3.metric("Target (1.0%)", f"₹{short_target}", delta=f"-₹{short_reward}/sh")
+    s_col2.metric("Stop Loss (1.0%)", f"₹{short_sl}", delta=f"+₹{short_risk}/sh", delta_color="inverse")
+    s_col3.metric("Target (2.0%)", f"₹{short_target}", delta=f"-₹{short_reward}/sh")
     s_col4.metric("Max Loss Risk", f"₹{max_loss_short:,}", delta="1 Contract Lot", delta_color="inverse")
     st.caption(f"📋 **Contract Details:** Auto Lot Size: **{bear_lot_size}** units | Potential Profit: **₹{max_profit_short:,}** | Margin Check: Ensure account can accommodate contract span constraints.")
 
