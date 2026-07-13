@@ -94,8 +94,8 @@ if trading_mode == "📈 Intraday Cash (Shares)":
 
 else:  # Futures Mode
     capital = st.sidebar.number_input("Trading Margin (₹)", value=150000, step=10000)
-    sl_pct = st.sidebar.number_input("Stop Loss (%)", value=0.5, step=0.1) / 100
-    tgt_pct = st.sidebar.number_input("Profit Target (%)", value=1.0, step=0.1) / 100
+    sl_pct = st.sidebar.number_input("Stop Loss (%)", value=1.0, step=0.1) / 100
+    tgt_pct = st.sidebar.number_input("Profit Target (%)", value=2.0, step=0.1) / 100
     st.sidebar.info(f"Target Risk-Reward: **1 : {round(tgt_pct / sl_pct, 1)}**")
 
 # --- MAIN PAGE HEADER ---
