@@ -5,7 +5,8 @@ import numpy as np
 import yfinance as yf
 from nselib import capital_market
 
-st.set_page_config(page_title="RISHI's Intraday Dashboard", page_icon="📊", layout="centered")
+# --- Page Layout Configuration ---
+st.set_page_config(page_title="RISHI's Multi-Asset Dashboard", page_icon="📊", layout="wide")
 
 def safe_price(val):
     try:
@@ -13,13 +14,26 @@ def safe_price(val):
     except:
         return 0.0
 
-# --- ATR Calculation ---
+# --- Automated Lot Size Fetcher (For Futures Mode) ---
+@st.cache_data(ttl=3600)
+def get_fno_lot_sizes():
+    """Fetches live F&O stock list from NSE and maps symbols to lot sizes."""
+    try:
+        df = capital_market.fno_equity_list()
+        df.columns = [str(col).strip().upper() for col in df.columns]
+        if 'SYMBOL' in df.columns and 'LOT SIZE' in df.columns:
+            return dict(zip(df['SYMBOL'], pd.to_numeric(df['LOT SIZE'], errors='coerce').fillna(250).astype(int)))
+    except Exception:
+        pass
+    return {}
+
+def lookup_lot_size(symbol, lot_dict):
+    clean_sym = str(symbol).strip().upper()
+    return lot_dict.get(clean_sym, 250)
+
+# --- ATR Calculation (For Intraday Cash Mode) ---
 def get_atr(symbol, period=14):
-    """
-    Fetches last 30 days of daily OHLC from Yahoo Finance and returns
-    the 14-period ATR. Symbol should be NSE format e.g. 'RELIANCE.NS'
-    Returns None if data cannot be fetched.
-    """
+    """Fetches last 30 days of daily OHLC and returns 14-period ATR."""
     try:
         ticker = symbol.upper()
         if not ticker.endswith(".NS"):
@@ -41,46 +55,50 @@ def get_atr(symbol, period=14):
     except Exception:
         return None
 
-# --- IST time ---
+# --- Pre-load Data ---
+with st.spinner("Initializing NSE Live Lot Directories..."):
+    nse_lot_sizes = get_fno_lot_sizes()
+
+# --- Time Calculation ---
 UTC_NOW = datetime.utcnow()
 IST_NOW = UTC_NOW + timedelta(hours=5, minutes=30)
 
-# --- Header ---
-st.title("📊 RISHI's Momentum Dashboard")
-st.caption(f"Live Market Analysis Engine • System Time: {IST_NOW.strftime('%d %b %Y | %H:%M IST')}")
+# --- SIDEBAR CONTROL: Mood / Segment Selector ---
+st.sidebar.header("🕹️ Control Center")
+trading_mode = st.sidebar.radio(
+    "Choose Your Trading Mode:",
+    ["📈 Intraday Cash (Shares)", "🔥 Stock Futures (Lots)"],
+    help="Toggle between trading individual equity shares or standardized futures contracts."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ Capital & Risk Settings")
+
+if trading_mode == "📈 Intraday Cash (Shares)":
+    capital = st.sidebar.number_input("Trading Capital (₹)", value=30000, step=1000)
+    leverage = st.sidebar.number_input("MIS Leverage (x)", value=5, min_value=1, max_value=5)
+    max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=300, step=10)
+    buying_power = capital * leverage
+    st.sidebar.info(f"Total Buying Power: **₹{buying_power:,}**")
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📐 ATR Settings")
+    atr_period = st.sidebar.number_input("ATR Period (candles)", value=14, min_value=5, max_value=50)
+    atr_multiplier = st.sidebar.number_input("ATR Multiplier", value=1.5, min_value=0.5, max_value=5.0, step=0.1)
+
+else:  # Futures Mode
+    capital = st.sidebar.number_input("Trading Margin (₹)", value=150000, step=10000)
+    sl_pct = st.sidebar.number_input("Stop Loss (%)", value=0.5, step=0.1) / 100
+    tgt_pct = st.sidebar.number_input("Profit Target (%)", value=1.0, step=0.1) / 100
+    st.sidebar.info(f"Target Risk-Reward: **1 : {round(tgt_pct / sl_pct, 1)}**")
+
+# --- MAIN PAGE HEADER ---
+st.title("📊 RISHI's Multi-Asset Momentum Dashboard")
+st.caption(f"Engine Mode: **{trading_mode.upper()}** • System Time: {IST_NOW.strftime('%d %b %Y | %H:%M IST')}")
 st.markdown("---")
 
-# --- Strategy Parameters ---
-st.subheader("⚙️ Strategy Parameters")
-col_cap, col_lev, col_risk = st.columns(3)
-with col_cap:
-    capital = st.number_input("Trading Capital (₹)", value=30000, step=1000)
-with col_lev:
-    leverage = st.number_input("MIS Leverage (x)", value=5, min_value=1, max_value=5)
-with col_risk:
-    max_risk = st.number_input("Max Risk Per Trade (₹)", value=300, step=10)
-
-buying_power = capital * leverage
-st.info(f"Total Buying Power Available: **₹{buying_power:,}**")
-
-# --- ATR Multiplier Control ---
-st.subheader("📐 ATR Stop Loss Settings")
-col_atr1, col_atr2 = st.columns(2)
-with col_atr1:
-    atr_period = st.number_input("ATR Period (candles)", value=14, min_value=5, max_value=50,
-                                  help="Number of daily candles used to calculate ATR. 14 is standard.")
-with col_atr2:
-    atr_multiplier = st.number_input("ATR Multiplier", value=1.5, min_value=0.5, max_value=5.0, step=0.1,
-                                      help="SL = Entry ± (Multiplier × ATR). Lower = tighter SL, Higher = wider SL.")
-
-st.caption("📌 **How ATR SL works:** ATR measures average daily price range. "
-           "SL is placed at 1.5× that range from entry, so normal noise won't stop you out. "
-           "A higher multiplier gives the trade more breathing room but increases per-share risk.")
-st.markdown("---")
-
-# --- Live Market Feed ---
+# --- Live Market Feed Section (Shared by both modes) ---
 st.subheader("📡 Nifty Live Market Feed")
-
 auto_bullish_stock, auto_bullish_ltp = "no stock", 0.0
 auto_bearish_stock, auto_bearish_ltp = "no stock", 0.0
 
@@ -99,7 +117,7 @@ with tab_auto:
         st.error("⚠️ NSE Data Feed is busy or closed. Use the 'Manual Entry Override' tab.")
 
 with tab_manual:
-    st.caption("If the automated scanner fails, check your broker app's top movers list and type them manually:")
+    st.caption("Manual override feed controls:")
     col_m1, col_m2 = st.columns(2)
     with col_m1:
         man_bullish     = st.text_input("Top Gainer Symbol", value=auto_bullish_stock)
@@ -115,96 +133,111 @@ bearish_ltp   = man_bearish_ltp
 
 st.markdown("---")
 
-# --- Fetch ATR for both stocks ---
-with st.spinner("Fetching ATR data from Yahoo Finance..."):
-    bull_atr = get_atr(bullish_stock, period=atr_period)
-    bear_atr = get_atr(bearish_stock, period=atr_period)
+# ==========================================
+# MODULE 1: INTRADAY CASH ENGINE
+# ==========================================
+if trading_mode == "📈 Intraday Cash (Shares)":
+    with st.spinner("Fetching historical daily ATR from Yahoo Finance..."):
+        bull_atr = get_atr(bullish_stock, period=atr_period)
+        bear_atr = get_atr(bearish_stock, period=atr_period)
 
-# Show ATR info
-col_atr_bull, col_atr_bear = st.columns(2)
-with col_atr_bull:
+    # --- Calculations: Long ---
+    long_entry = round(bullish_ltp * 1.002, 2)
     if bull_atr:
-        st.metric(f"ATR ({atr_period}d) — {bullish_stock}", f"₹{bull_atr}",
-                  help="Average True Range: typical daily price swing for this stock.")
+        atr_sl_dist = round(bull_atr * atr_multiplier, 2)
+        long_sl = round(long_entry - atr_sl_dist, 2)
+        long_risk = round(long_entry - long_sl, 2)
+        sl_method_long = f"ATR × {atr_multiplier} (₹{atr_sl_dist})"
     else:
-        st.warning(f"Could not fetch ATR for {bullish_stock}. Falling back to 0.5% SL.")
-with col_atr_bear:
+        long_sl = round(long_entry * 0.995, 2)
+        long_risk = round(long_entry - long_sl, 2)
+        sl_method_long = "Fallback: 0.5% Rule"
+
+    long_qty = min(int(max_risk // long_risk), int(buying_power // long_entry)) if long_risk > 0 else 1
+    long_target1 = round(long_entry + (long_risk * 2), 2)
+    long_target2 = round(long_entry + (long_risk * 3), 2)
+
+    # --- Calculations: Short ---
+    short_entry = round(bearish_ltp * 0.998, 2)
     if bear_atr:
-        st.metric(f"ATR ({atr_period}d) — {bearish_stock}", f"₹{bear_atr}",
-                  help="Average True Range: typical daily price swing for this stock.")
+        atr_sl_dist_s = round(bear_atr * atr_multiplier, 2)
+        short_sl = round(short_entry + atr_sl_dist_s, 2)
+        short_risk = round(short_sl - short_entry, 2)
+        sl_method_short = f"ATR × {atr_multiplier} (₹{atr_sl_dist_s})"
     else:
-        st.warning(f"Could not fetch ATR for {bearish_stock}. Falling back to 0.5% SL.")
+        short_sl = round(short_entry * 1.005, 2)
+        short_risk = round(short_sl - short_entry, 2)
+        sl_method_short = "Fallback: 0.5% Rule"
 
-st.markdown("---")
+    short_qty = min(int(max_risk // short_risk), int(buying_power // short_entry)) if short_risk > 0 else 1
+    short_target1 = round(short_entry - (short_risk * 2), 2)
+    short_target2 = round(short_entry - (short_risk * 3), 2)
 
-# --- LONG calculations ---
-long_entry = round(bullish_ltp * 1.002, 2)
+    # --- Render: Long Setup ---
+    st.success(f"### 📈 INTRADAY CASH LONG: {bullish_stock}")
+    l_col1, l_col2, l_col3, l_col4 = st.columns(4)
+    l_col1.metric("Entry Trigger", f"₹{long_entry}")
+    l_col2.metric(f"Stop Loss ({sl_method_long})", f"₹{long_sl}", delta=f"-₹{long_risk}/sh", delta_color="inverse")
+    l_col3.metric("Targets (1:2 | 1:3)", f"₹{long_target1} / ₹{long_target2}")
+    l_col4.metric("Max Account Loss", f"₹{round(long_risk * long_qty, 2):,}", delta="Calculated Risk", delta_color="inverse")
+    st.caption(f"💡 Trade Size: **{long_qty} shares** | Target 1 Profit potential: **₹{round(long_risk * 2 * long_qty, 2):,}** | Margin Utilized: ~₹{round((long_entry * long_qty)/leverage, 2):,}")
 
-if bull_atr:
-    atr_sl_distance_long = round(bull_atr * atr_multiplier, 2)
-    long_sl   = round(long_entry - atr_sl_distance_long, 2)
-    long_risk = round(long_entry - long_sl, 2)
-    sl_method_long = f"ATR × {atr_multiplier} = ₹{atr_sl_distance_long} below entry"
+    st.markdown("---")
+
+    # --- Render: Short Setup ---
+    st.error(f"### 📉 INTRADAY CASH SHORT: {bearish_stock}")
+    s_col1, s_col2, s_col3, s_col4 = st.columns(4)
+    s_col1.metric("Entry Trigger", f"₹{short_entry}")
+    s_col2.metric(f"Stop Loss ({sl_method_short})", f"₹{short_sl}", delta=f"+₹{short_risk}/sh", delta_color="inverse")
+    s_col3.metric("Targets (1:2 | 1:3)", f"₹{short_target1} / ₹{short_target2}")
+    s_col4.metric("Max Account Loss", f"₹{round(short_risk * short_qty, 2):,}", delta="Calculated Risk", delta_color="inverse")
+    st.caption(f"💡 Trade Size: **{short_qty} shares** | Target 1 Profit potential: **₹{round(short_risk * 2 * short_qty, 2):,}** | Margin Utilized: ~₹{round((short_entry * short_qty)/leverage, 2):,}")
+
+# ==========================================
+# MODULE 2: STOCK FUTURES ENGINE
+# ==========================================
 else:
-    long_sl   = round(long_entry * 0.995, 2)
-    long_risk = round(long_entry - long_sl, 2)
-    sl_method_long = "Fallback: 0.5% below entry (ATR unavailable)"
+    bull_lot_size = lookup_lot_size(bullish_stock, nse_lot_sizes)
+    bear_lot_size = lookup_lot_size(bearish_stock, nse_lot_sizes)
 
-long_qty     = min(int(max_risk // long_risk), int(buying_power // long_entry)) if long_risk > 0 else 1
-long_target1 = round(long_entry + (long_risk * 2), 2)
-long_target2 = round(long_entry + (long_risk * 3), 2)
+    # --- Calculations: Long Futures ---
+    long_entry  = round(bullish_ltp * 1.002, 2)
+    long_sl     = round(long_entry * (1 - sl_pct), 2)
+    long_risk   = round(long_entry - long_sl, 2)
+    long_target = round(long_entry * (1 + tgt_pct), 2)
+    long_reward = round(long_target - long_entry, 2)
+    max_loss_long   = round(long_risk * bull_lot_size, 2)
+    max_profit_long = round(long_reward * bull_lot_size, 2)
 
-# --- SHORT calculations ---
-short_entry = round(bearish_ltp * 0.998, 2)
+    # --- Calculations: Short Futures ---
+    short_entry  = round(bearish_ltp * 0.998, 2)
+    short_sl     = round(short_entry * (1 + sl_pct), 2)
+    short_risk   = round(short_sl - short_entry, 2)
+    short_target = round(short_entry * (1 - tgt_pct), 2)
+    short_reward = round(short_entry - short_target, 2)
+    max_loss_short   = round(short_risk * bear_lot_size, 2)
+    max_profit_short = round(short_reward * bear_lot_size, 2)
 
-if bear_atr:
-    atr_sl_distance_short = round(bear_atr * atr_multiplier, 2)
-    short_sl   = round(short_entry + atr_sl_distance_short, 2)
-    short_risk = round(short_sl - short_entry, 2)
-    sl_method_short = f"ATR × {atr_multiplier} = ₹{atr_sl_distance_short} above entry"
-else:
-    short_sl   = round(short_entry * 1.005, 2)
-    short_risk = round(short_sl - short_entry, 2)
-    sl_method_short = "Fallback: 0.5% above entry (ATR unavailable)"
+    # --- Render: Long Futures Setup ---
+    st.success(f"### 📈 STOCK FUTURES LONG: {bullish_stock}")
+    l_col1, l_col2, l_col3, l_col4 = st.columns(4)
+    l_col1.metric("Trigger Entry", f"₹{long_entry}")
+    l_col2.metric("Stop Loss (0.5%)", f"₹{long_sl}", delta=f"-₹{long_risk}/sh", delta_color="inverse")
+    l_col3.metric("Target (1.0%)", f"₹{long_target}", delta=f"+₹{long_reward}/sh")
+    l_col4.metric("Max Loss Risk", f"₹{max_loss_long:,}", delta="1 Contract Lot", delta_color="inverse")
+    st.caption(f"📋 **Contract Details:** Auto Lot Size: **{bull_lot_size}** units | Potential Profit: **₹{max_profit_long:,}** | Margin Check: Ensure account can accommodate contract span constraints.")
 
-short_qty     = min(int(max_risk // short_risk), int(buying_power // short_entry)) if short_risk > 0 else 1
-short_target1 = round(short_entry - (short_risk * 2), 2)
-short_target2 = round(short_entry - (short_risk * 3), 2)
+    st.markdown("---")
 
-# --- RENDER: LONG ---
-st.success(f"### 📈 LONG SETUP: {bullish_stock}")
-st.caption(f"🛑 SL Method: {sl_method_long}")
+    # --- Render: Short Futures Setup ---
+    st.error(f"### 📉 STOCK FUTURES SHORT: {bearish_stock}")
+    s_col1, s_col2, s_col3, s_col4 = st.columns(4)
+    s_col1.metric("Trigger Entry", f"₹{short_entry}")
+    s_col2.metric("Stop Loss (0.5%)", f"₹{short_sl}", delta=f"+₹{short_risk}/sh", delta_color="inverse")
+    s_col3.metric("Target (1.0%)", f"₹{short_target}", delta=f"-₹{short_reward}/sh")
+    s_col4.metric("Max Loss Risk", f"₹{max_loss_short:,}", delta="1 Contract Lot", delta_color="inverse")
+    st.caption(f"📋 **Contract Details:** Auto Lot Size: **{bear_lot_size}** units | Potential Profit: **₹{max_profit_short:,}** | Margin Check: Ensure account can accommodate contract span constraints.")
 
-l_col1, l_col2, l_col3 = st.columns(3)
-l_col1.metric("Trigger Entry", f"₹{long_entry}")
-l_col2.metric("Stop Loss (ATR)", f"₹{long_sl}", delta=f"-₹{long_risk} risk/share", delta_color="inverse")
-l_col3.metric("Quantity", f"{long_qty} shares")
-
-l_col_t1, l_col_t2 = st.columns(2)
-l_col_t1.metric("🎯 Target 1 (1:2 RR)", f"₹{long_target1}", delta=f"+₹{round(long_risk*2,2)}")
-l_col_t2.metric("🎯 Target 2 (1:3 RR)", f"₹{long_target2}", delta=f"+₹{round(long_risk*3,2)}")
-st.caption(f"Max loss if SL hit: **₹{round(long_risk * long_qty, 2)}** | "
-           f"Profit at T1: **₹{round(long_risk * 2 * long_qty, 2)}** | "
-           f"Approx margin: **₹{round((long_entry * long_qty)/leverage, 2)}**")
-
+# --- Shared Footer Guardrails ---
 st.markdown("---")
-
-# --- RENDER: SHORT ---
-st.error(f"### 📉 SHORT SETUP: {bearish_stock}")
-st.caption(f"🛑 SL Method: {sl_method_short}")
-
-s_col1, s_col2, s_col3 = st.columns(3)
-s_col1.metric("Trigger Entry", f"₹{short_entry}")
-s_col2.metric("Stop Loss (ATR)", f"₹{short_sl}", delta=f"+₹{short_risk} risk/share", delta_color="inverse")
-s_col3.metric("Quantity", f"{short_qty} shares")
-
-s_col_t1, s_col_t2 = st.columns(2)
-s_col_t1.metric("🎯 Target 1 (1:2 RR)", f"₹{short_target1}", delta=f"-₹{round(short_risk*2,2)}")
-s_col_t2.metric("🎯 Target 2 (1:3 RR)", f"₹{short_target2}", delta=f"-₹{round(short_risk*3,2)}")
-st.caption(f"Max loss if SL hit: **₹{round(short_risk * short_qty, 2)}** | "
-           f"Profit at T1: **₹{round(short_risk * 2 * short_qty, 2)}** | "
-           f"Approx margin: **₹{round((short_entry * short_qty)/leverage, 2)}**")
-
-st.markdown("---")
-st.warning("⚠️ **Execution Guardrail:** Manually configure these setups as **SL-Limit (MIS)** orders directly on your broker platform.")
-st.info("ℹ️ ATR is calculated from daily candles via Yahoo Finance (.NS suffix). For intraday precision, consider switching to 15-min ATR once your data source supports it.")
+st.warning("⚠️ **Execution Guardrail:** Always deploy these setups using **SL-Limit (MIS/NRML)** orders directly within your broker terminal. Do not use market orders to avoid execution slippage.")
