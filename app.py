@@ -249,14 +249,15 @@ if trading_mode == "📈 Intraday Cash (Shares)":
     st.markdown("---")
 
     # --- Render: Short Setup ---
+    # --- Render: Short Setup ---
     st.error(f"### 📉 INTRADAY CASH SHORT: {bearish_stock}")
     s_col1, s_col2, s_col3, s_col4 = st.columns(4)
     s_col1.metric("Entry Trigger", f"₹{short_entry}")
     s_col2.metric(f"Stop Loss ({sl_method_short})", f"₹{short_sl}", delta=f"+₹{short_risk}/sh", delta_color="inverse")
     s_col3.metric("Targets (1:2 | 1:3)", f"₹{short_target1} / ₹{short_target2}")
+    
+    # Verify this line matches exactly:
     s_col4.metric("Max Account Loss", f"₹{round(short_risk * short_qty, 2):,}", delta="Calculated Risk", delta_color="inverse")
-    st.caption(f"💡 Trade Size: **{short_qty} shares** | Target 1 Profit potential: **₹{round(short_risk * 2 * short_qty, 2):,}** | Margin Utilized: ~₹{round((short_entry * short_qty)/leverage, 2):,}")
-
 # ==========================================
 # MODULE 2: STOCK FUTURES ENGINE
 # ==========================================
