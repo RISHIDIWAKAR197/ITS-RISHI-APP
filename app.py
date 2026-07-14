@@ -2,6 +2,7 @@ st.set_page_config(
     page_title="The Ennoble Trader | Multi-Asset Intraday Tool", 
     page_icon="📊", 
     layout="wide"
+)
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 import pandas as pd
