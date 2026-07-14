@@ -1,8 +1,3 @@
-st.set_page_config(
-    page_title="The Ennoble Trader | Multi-Asset Intraday Tool", 
-    page_icon="📊", 
-    layout="wide"
-)
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -10,8 +5,12 @@ import numpy as np
 import yfinance as yf
 from nselib import capital_market
 
-# --- Page Layout Configuration ---
-st.set_page_config(page_title="RISHI's Multi-Asset Dashboard", page_icon="📊", layout="wide")
+# Now you can safely configure the page layout!
+st.set_page_config(
+    page_title="The Ennoble Trader | Multi-Asset Intraday Tool", 
+    page_icon="📊", 
+    layout="wide"
+)
 
 def safe_price(val):
     try:
