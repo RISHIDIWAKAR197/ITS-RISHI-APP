@@ -173,46 +173,46 @@ if trading_mode == "📈 Intraday Cash (Shares)":
     long_sl = round(long_entry - atr_sl_dist, 2)
     long_risk = max(round(long_entry - long_sl, 2), 0.05)
     
-if  long_entry <= 0:
-    # Handle the invalid entry price (e.g., set quantity to 0 or skip)
-    long_qty = 0 
-else:
-    long_qty = max(min(int(max_risk // long_risk), int(buying_power // long_entry)), 1)
-    long_target1 = round(long_entry + (long_risk * 2), 2)
-    long_target2 = round(long_entry + (long_risk * 3), 2)
-    
-    # Short Calculations
-    short_entry = round(bearish_ltp * 0.998, 2)
-    atr_sl_dist_s = round(bear_atr * atr_multiplier, 2) if bear_atr else round(short_entry * 0.005, 2)
-    short_sl = round(short_entry + atr_sl_dist_s, 2)
-    short_risk = max(round(short_sl - short_entry, 2), 0.05)
-    short_qty = max(min(int(max_risk // short_risk), int(buying_power // short_entry)), 1)
-    short_target1 = round(short_entry - (short_risk * 2), 2)
-    short_target2 = round(short_entry - (short_risk * 3), 2)
+    if long_entry <= 0:
+        # Handle the invalid entry price (e.g., set quantity to 0 or skip)
+        long_qty = 0 
+    else:
+        long_qty = max(min(int(max_risk // long_risk), int(buying_power // long_entry)), 1)
+        long_target1 = round(long_entry + (long_risk * 2), 2)
+        long_target2 = round(long_entry + (long_risk * 3), 2)
+        
+        # Short Calculations
+        short_entry = round(bearish_ltp * 0.998, 2)
+        atr_sl_dist_s = round(bear_atr * atr_multiplier, 2) if bear_atr else round(short_entry * 0.005, 2)
+        short_sl = round(short_entry + atr_sl_dist_s, 2)
+        short_risk = max(round(short_sl - short_entry, 2), 0.05)
+        short_qty = max(min(int(max_risk // short_risk), int(buying_power // short_entry)), 1)
+        short_target1 = round(short_entry - (short_risk * 2), 2)
+        short_target2 = round(short_entry - (short_risk * 3), 2)
 
-    # --- Render: Long ---
-    st.success(f"### 📈 INTRADAY CASH LONG: {bullish_stock}")
-    q_col1, q_col2 = st.columns(2)
-    q_col1.info(f"### 🎯 TRADE QUANTITY: **{long_qty} shares**")
-    q_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{round(long_risk * long_qty, 2):,}**")
-    
-    l_col1, l_col2, l_col3, l_col4 = st.columns(4)
-    l_col1.metric("Entry Trigger", f"₹{long_entry}")
-    l_col2.metric("Stop Loss", f"₹{long_sl}", delta=f"-{round((long_risk/long_entry)*100,2)}% (-₹{long_risk}/sh)", delta_color="inverse")
-    l_col3.metric("Target 1 (1:2)", f"₹{long_target1}", delta=f"+{round(((long_target1-long_entry)/long_entry)*100,2)}%")
-    l_col4.metric("Target 2 (1:3)", f"₹{long_target2}", delta=f"+{round(((long_target2-long_entry)/long_entry)*100,2)}%")
+        # --- Render: Long ---
+        st.success(f"### 📈 INTRADAY CASH LONG: {bullish_stock}")
+        q_col1, q_col2 = st.columns(2)
+        q_col1.info(f"### 🎯 TRADE QUANTITY: **{long_qty} shares**")
+        q_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{round(long_risk * long_qty, 2):,}**")
+        
+        l_col1, l_col2, l_col3, l_col4 = st.columns(4)
+        l_col1.metric("Entry Trigger", f"₹{long_entry}")
+        l_col2.metric("Stop Loss", f"₹{long_sl}", delta=f"-{round((long_risk/long_entry)*100,2)}% (-₹{long_risk}/sh)", delta_color="inverse")
+        l_col3.metric("Target 1 (1:2)", f"₹{long_target1}", delta=f"+{round(((long_target1-long_entry)/long_entry)*100,2)}%")
+        l_col4.metric("Target 2 (1:3)", f"₹{long_target2}", delta=f"+{round(((long_target2-long_entry)/long_entry)*100,2)}%")
 
-    # --- Render: Short ---
-    st.error(f"### 📉 INTRADAY CASH SHORT: {bearish_stock}")
-    qs_col1, qs_col2 = st.columns(2)
-    qs_col1.info(f"### 🎯 TRADE QUANTITY: **{short_qty} shares**")
-    qs_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{round(short_risk * short_qty, 2):,}**")
-    
-    s_col1, s_col2, s_col3, s_col4 = st.columns(4)
-    s_col1.metric("Entry Trigger", f"₹{short_entry}")
-    s_col2.metric("Stop Loss", f"₹{short_sl}", delta=f"+{round((short_risk/short_entry)*100,2)}% (+₹{short_risk}/sh)", delta_color="inverse")
-    s_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{round(((short_entry-short_target1)/short_entry)*100,2)}%")
-    s_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{round(((short_entry-short_target2)/short_entry)*100,2)}%")
+        # --- Render: Short ---
+        st.error(f"### 📉 INTRADAY CASH SHORT: {bearish_stock}")
+        qs_col1, qs_col2 = st.columns(2)
+        qs_col1.info(f"### 🎯 TRADE QUANTITY: **{short_qty} shares**")
+        qs_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{round(short_risk * short_qty, 2):,}**")
+        
+        s_col1, s_col2, s_col3, s_col4 = st.columns(4)
+        s_col1.metric("Entry Trigger", f"₹{short_entry}")
+        s_col2.metric("Stop Loss", f"₹{short_sl}", delta=f"+{round((short_risk/short_entry)*100,2)}% (+₹{short_risk}/sh)", delta_color="inverse")
+        s_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{round(((short_entry-short_target1)/short_entry)*100,2)}%")
+        s_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{round(((short_entry-short_target2)/short_entry)*100,2)}%")
 
 # ==========================================
 # MODULE 2: STOCK FUTURES ENGINE (WITH ATR & RISK-FILTER)
@@ -277,7 +277,7 @@ else:
         sf_col1, sf_col2, sf_col3, sf_col4 = st.columns(4)
         sf_col1.metric("Trigger Entry (-0.2%)", f"₹{short_entry}")
         sf_col2.metric(f"ATR Stop Loss", f"₹{short_sl}", delta=f"+{round((short_risk/short_entry)*100,2)}% (+₹{short_risk}/sh)", delta_color="inverse")
-        sf_col1.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{round(((short_entry-short_target1)/short_entry)*100,2)}%")
+        sf_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{round(((short_entry-short_target1)/short_entry)*100,2)}%")
         sf_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{round(((short_entry-short_target2)/short_entry)*100,2)}%")
         
         with st.expander("🔍 VIEW SHORT FUTURES LOGIC"):
