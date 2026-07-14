@@ -172,6 +172,10 @@ if trading_mode == "📈 Intraday Cash (Shares)":
     atr_sl_dist = round(bull_atr * atr_multiplier, 2) if bull_atr else round(long_entry * 0.005, 2)
     long_sl = round(long_entry - atr_sl_dist, 2)
     long_risk = max(round(long_entry - long_sl, 2), 0.05)
+    if long_entry <= 0:
+    # Handle the invalid entry price (e.g., set quantity to 0 or skip)
+    long_qty = 0 
+else:
     long_qty = max(min(int(max_risk // long_risk), int(buying_power // long_entry)), 1)
     long_target1 = round(long_entry + (long_risk * 2), 2)
     long_target2 = round(long_entry + (long_risk * 3), 2)
