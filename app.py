@@ -155,7 +155,7 @@ st.markdown("---")
 # ==========================================
 # FETCH INTRADAY ATR FOR SELECTED STOCKS
 # ==========================================
-with St.spinner("Fetching historical intraday data from Yahoo Finance..."):
+with st.spinner("Fetching historical intraday data from Yahoo Finance..."):
     bull_atr = get_atr(bullish_stock, period=atr_period)
     bear_atr = get_atr(bearish_stock, period=atr_period)
 
