@@ -33,15 +33,51 @@ def lookup_lot_size(symbol, lot_dict):
 
 # --- ATR Calculation (For Intraday Cash Mode) ---
 def get_atr(symbol, period=14):
-    """Fetches last 30 days of daily OHLC and returns 14-period ATR."""
+    """
+    Fetches the last 5 days of 5-minute intraday data 
+    and returns a valid Intraday 14-period ATR.
+    """
     try:
         ticker = symbol.upper().strip()
         if not ticker.endswith(".NS"):
             ticker = ticker + ".NS"
         
-        df = yf.download(ticker, period="30d", interval="1d", progress=False, auto_adjust=True)
+        # 1. Fetch 5-minute bars over the last 5 days (perfect for Intraday context)
+        df = yf.download(
+            tickers=ticker, 
+            period="5d", 
+            interval="5m", 
+            progress=False, 
+            auto_adjust=True,
+            multi_level_index=False  # Prevents MultiIndex creation in newer yfinance versions
+        )
+        
         if df.empty or len(df) < period + 1:
             return None
+            
+        df = df.copy()
+        
+        # 2. Extract series safely regardless of structure
+        high = df["High"]
+        low = df["Low"]
+        close = df["Close"]
+        prev_close = close.shift(1)
+        
+        # 3. True Range Calculation
+        tr1 = high - low
+        tr2 = (high - prev_close).abs()
+        tr3 = (low - prev_close).abs()
+        
+        df["tr"] = np.maximum(tr1, np.maximum(tr2, tr3))
+        
+        # 4. Use Wilders Moving Average (Standard ATR) or a simple rolling mean
+        atr = df["tr"].rolling(window=period).mean().iloc[-1]
+        
+        return round(float(atr), 2)
+    except Exception as e:
+        # Log error to streamlit console for debugging if needed
+        print(f"ATR Error for {symbol}: {e}")
+        return None
         
         df = df.copy()
         
