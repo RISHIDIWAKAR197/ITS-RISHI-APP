@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
 import yfinance as yf
 from nselib import capital_market, derivatives
@@ -94,6 +95,44 @@ def get_top_movers(direction: str):
     return symbol, ltp, None
 
 
+API_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://www.nseindia.com/",
+    "Connection": "keep-alive",
+}
+
+
+def nse_api_fetch(url: str, referer: str):
+    """
+    Standalone JSON-API fetcher (separate from nselib's HTML-oriented
+    nse_urlfetch) tuned for NSE's XHR endpoints. On failure, returns
+    enough of the raw HTTP response to diagnose *why* (status code +
+    body snippet) instead of just a JSON-decode error.
+    """
+    session = requests.Session()
+    session.headers.update(API_HEADERS)
+    # Prime cookies from the homepage - required before any /api/ call.
+    session.get("https://www.nseindia.com/", timeout=10)
+    time.sleep(0.5)
+    resp = session.get(url, headers={"Referer": referer}, timeout=10)
+
+    body_snippet = (resp.text or "")[:200].replace("\n", " ").strip()
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} from NSE. Body: '{body_snippet}'")
+    if not resp.text or not resp.text.strip():
+        raise RuntimeError(f"NSE returned an empty body (HTTP {resp.status_code}, likely blocked/rate-limited).")
+    try:
+        return resp.json()
+    except ValueError:
+        raise RuntimeError(f"NSE returned non-JSON content. Body starts with: '{body_snippet}'")
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def get_live_futures_quote(symbol: str):
     """
@@ -105,21 +144,19 @@ def get_live_futures_quote(symbol: str):
     """
     clean_sym = str(symbol).strip().upper()
     url = f"https://www.nseindia.com/api/quote-derivative?symbol={clean_sym}"
-    origin = f"https://www.nseindia.com/get-quotes/derivatives?symbol={clean_sym}"
+    referer = f"https://www.nseindia.com/get-quotes/derivatives?symbol={clean_sym}"
 
     last_err = None
+    data = None
     for attempt in range(NSE_RETRIES):
         try:
-            resp = nse_urlfetch(url, origin_url=origin)
-            data = resp.json()
+            data = nse_api_fetch(url, referer)
             break
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
             data = None
         if attempt < NSE_RETRIES - 1:
             time.sleep(NSE_RETRY_DELAY)
-    else:
-        return None, None, None, last_err
 
     if data is None:
         return None, None, None, last_err or "No response from NSE live endpoint."
