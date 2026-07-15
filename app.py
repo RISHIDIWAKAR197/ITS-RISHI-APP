@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 from nselib import capital_market, derivatives
+from nselib.libutil import nse_urlfetch
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -93,12 +94,72 @@ def get_top_movers(direction: str):
     return symbol, ltp, None
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def get_futures_quote(symbol: str):
+@st.cache_data(ttl=15, show_spinner=False)
+def get_live_futures_quote(symbol: str):
     """
-    Fetches the genuine near-month NSE stock-futures LTP and lot size
-    directly from the derivatives segment (no Yahoo Finance - Yahoo does
-    not carry Indian single-stock futures).
+    Fetches the ACTUAL live near-month futures LTP from NSE's real-time
+    quote-derivative endpoint (the same data that powers nseindia.com's
+    own quote page). This is a genuine live tick, unlike the historical
+    archive used by nselib's future_price_volume_data().
+    Returns (ltp, lot_size, expiry_str, error_message).
+    """
+    clean_sym = str(symbol).strip().upper()
+    url = f"https://www.nseindia.com/api/quote-derivative?symbol={clean_sym}"
+    origin = f"https://www.nseindia.com/get-quotes/derivatives?symbol={clean_sym}"
+
+    last_err = None
+    for attempt in range(NSE_RETRIES):
+        try:
+            resp = nse_urlfetch(url, origin_url=origin)
+            data = resp.json()
+            break
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            data = None
+        if attempt < NSE_RETRIES - 1:
+            time.sleep(NSE_RETRY_DELAY)
+    else:
+        return None, None, None, last_err
+
+    if data is None:
+        return None, None, None, last_err or "No response from NSE live endpoint."
+
+    stocks = data.get("stocks") if isinstance(data, dict) else None
+    if not stocks:
+        return None, None, None, "Live quote endpoint returned no derivative contracts for this symbol."
+
+    futures_rows = []
+    for item in stocks:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("metadata", {}) or {}
+        if "future" not in str(meta.get("instrumentType", "")).lower():
+            continue
+        expiry_parsed = pd.to_datetime(meta.get("expiryDate"), format="%d-%b-%Y", errors="coerce")
+        ltp = safe_float(meta.get("lastPrice"))
+        trade_info = (item.get("marketDeptOrderBook") or {}).get("tradeInfo") or {}
+        lot_size = safe_float(trade_info.get("marketLot")) or safe_float(meta.get("marketLot"))
+        if pd.notna(expiry_parsed) and ltp:
+            futures_rows.append((expiry_parsed, ltp, lot_size, meta.get("expiryDate")))
+
+    if not futures_rows:
+        return None, None, None, "NSE response didn't contain a parsable futures contract (schema may have shifted)."
+
+    futures_rows.sort(key=lambda r: r[0])
+    _, ltp, lot_size, expiry_str = futures_rows[0]
+    if not ltp or ltp <= 0:
+        return None, None, None, "Live futures LTP came back invalid/zero."
+
+    return ltp, int(lot_size) if lot_size else None, expiry_str, None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_eod_futures_quote(symbol: str):
+    """
+    Fallback source: NSE's historical/EOD derivatives archive
+    (api/historicalOR/foCPV). NOTE - this reflects the last recorded
+    session's data, not a real-time tick, so it can lag the live market.
+    Used only when get_live_futures_quote() fails.
     Returns (ltp, lot_size, expiry_str, error_message).
     """
     clean_sym = str(symbol).strip().upper()
@@ -183,7 +244,7 @@ if trading_mode == "📈 Intraday Cash (Shares)":
     buying_power = capital * leverage
     st.sidebar.info(f"Total Buying Power: **₹{buying_power:,}**")
 else:
-    capital = st.sidebar.number_input("Trading Margin (₹)", value=170000, step=10000)
+    capital = st.sidebar.number_input("Trading Margin (₹)", value=150000, step=10000)
     max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=5000, step=250)
     st.sidebar.warning(
         "🛡️ Contracts exceeding your absolute max risk or available margin limits will automatically block."
@@ -257,40 +318,67 @@ st.markdown("---")
 # ============================================================
 # FUTURES PRICING (real futures data, honest fallback to spot)
 # ============================================================
-bull_is_futures = bear_is_futures = False
+bull_price_tag = bear_price_tag = "Spot"
 bull_lot_size = bear_lot_size = None
 
+
+def resolve_futures_price(symbol, spot_price):
+    """
+    Tries live quote -> EOD historical quote -> spot, in that order.
+    Returns (price, lot_size, tag, debug_lines) where tag is one of
+    'Live Futures', 'EOD Futures', or 'Spot (futures unavailable)'.
+    """
+    debug_lines = []
+
+    ltp, lot_size, expiry, err = get_live_futures_quote(symbol)
+    if not err:
+        return ltp, lot_size, f"Live Futures ({expiry})", debug_lines
+    debug_lines.append(f"Live quote failed: {err}")
+
+    ltp, lot_size, expiry, err = get_eod_futures_quote(symbol)
+    if not err:
+        return ltp, lot_size, f"EOD Futures ({expiry}, previous session)", debug_lines
+    debug_lines.append(f"EOD quote failed: {err}")
+
+    return spot_price, None, "Spot (futures unavailable)", debug_lines
+
+
 if trading_mode == "🔥 Stock Futures (Lots)":
-    with st.spinner("Fetching near-month futures contracts from NSE derivatives segment..."):
-        bull_fut_ltp, bull_lot_size, bull_expiry, bull_fut_err = get_futures_quote(bullish_stock)
-        bear_fut_ltp, bear_lot_size, bear_expiry, bear_fut_err = get_futures_quote(bearish_stock)
+    with st.spinner("Fetching live near-month futures quotes from NSE..."):
+        bull_price, bull_lot_size, bull_price_tag, bull_dbg = resolve_futures_price(
+            bullish_stock, bullish_ltp
+        )
+        bear_price, bear_lot_size, bear_price_tag, bear_dbg = resolve_futures_price(
+            bearish_stock, bearish_ltp
+        )
         lot_map, lot_err = get_fno_lot_sizes()
 
-    if bull_fut_err:
-        st.warning(
-            f"⚠️ **{bullish_stock}**: could not fetch live futures data ({bull_fut_err}). "
-            f"Falling back to **spot price (₹{bullish_ltp})** for calculations."
-        )
-        bull_is_futures = False
+    bull_is_futures = bull_price_tag.startswith(("Live", "EOD"))
+    bear_is_futures = bear_price_tag.startswith(("Live", "EOD"))
+
+    if bull_is_futures:
+        bullish_ltp = bull_price
+        st.info(f"⚡ **{bullish_stock}** — {bull_price_tag} = **₹{bullish_ltp}**")
+    else:
+        st.warning(f"⚠️ **{bullish_stock}**: futures data unavailable. Using **spot price (₹{bullish_ltp})**.")
         if bull_lot_size is None:
             bull_lot_size = lookup_lot_size(bullish_stock, lot_map)
-    else:
-        bullish_ltp = bull_fut_ltp
-        bull_is_futures = True
-        st.info(f"⚡ **{bullish_stock}** Futures ({bull_expiry}) = **₹{bullish_ltp}**")
+    if bull_dbg:
+        with st.expander(f"🔍 {bullish_stock} futures fetch details"):
+            for line in bull_dbg:
+                st.write(line)
 
-    if bear_fut_err:
-        st.warning(
-            f"⚠️ **{bearish_stock}**: could not fetch live futures data ({bear_fut_err}). "
-            f"Falling back to **spot price (₹{bearish_ltp})** for calculations."
-        )
-        bear_is_futures = False
+    if bear_is_futures:
+        bearish_ltp = bear_price
+        st.info(f"⚡ **{bearish_stock}** — {bear_price_tag} = **₹{bearish_ltp}**")
+    else:
+        st.warning(f"⚠️ **{bearish_stock}**: futures data unavailable. Using **spot price (₹{bearish_ltp})**.")
         if bear_lot_size is None:
             bear_lot_size = lookup_lot_size(bearish_stock, lot_map)
-    else:
-        bearish_ltp = bear_fut_ltp
-        bear_is_futures = True
-        st.info(f"⚡ **{bearish_stock}** Futures ({bear_expiry}) = **₹{bearish_ltp}**")
+    if bear_dbg:
+        with st.expander(f"🔍 {bearish_stock} futures fetch details"):
+            for line in bear_dbg:
+                st.write(line)
 
     if bull_lot_size is None or bear_lot_size is None:
         missing = []
@@ -385,7 +473,7 @@ if trading_mode == "📈 Intraday Cash (Shares)":
 # ============================================================
 else:
     long_entry, long_sl, long_risk, long_t1, long_t2 = build_long_setup(bullish_ltp, bull_atr)
-    price_tag_bull = "Futures" if bull_is_futures else "Spot (futures unavailable)"
+    price_tag_bull = bull_price_tag
 
     st.success(f"### 📈 STOCK FUTURES LONG: {bullish_stock} — {price_tag_bull}{atr_note_bull}")
     if long_entry > 0 and long_risk > 0:
@@ -408,7 +496,7 @@ else:
             q2.error(f"### 🛡️ MAX LOSS RISK: **₹{max_loss_long:,}**")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric(f"{price_tag_bull} Entry Trigger", f"₹{long_entry}")
+            c1.metric(f"{price_tag_bull.split(' (')[0]} Entry Trigger", f"₹{long_entry}")
             c2.metric("ATR Stop Loss", f"₹{long_sl}", delta=f"-₹{long_risk}/sh", delta_color="inverse")
             c3.metric("Target 1 (1:2)", f"₹{long_t1}")
             c4.metric("Target 2 (1:3)", f"₹{long_t2}")
@@ -418,7 +506,7 @@ else:
     st.markdown("---")
 
     short_entry, short_sl, short_risk, short_t1, short_t2 = build_short_setup(bearish_ltp, bear_atr)
-    price_tag_bear = "Futures" if bear_is_futures else "Spot (futures unavailable)"
+    price_tag_bear = bear_price_tag
 
     st.error(f"### 📉 STOCK FUTURES SHORT: {bearish_stock} — {price_tag_bear}{atr_note_bear}")
     if short_entry > 0 and short_risk > 0:
@@ -441,7 +529,7 @@ else:
             q2.error(f"### 🛡️ MAX LOSS RISK: **₹{max_loss_short:,}**")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric(f"{price_tag_bear} Entry Trigger", f"₹{short_entry}")
+            c1.metric(f"{price_tag_bear.split(' (')[0]} Entry Trigger", f"₹{short_entry}")
             c2.metric("ATR Stop Loss", f"₹{short_sl}", delta=f"+₹{short_risk}/sh", delta_color="inverse")
             c3.metric("Target 1 (1:2)", f"₹{short_t1}")
             c4.metric("Target 2 (1:3)", f"₹{short_t2}")
