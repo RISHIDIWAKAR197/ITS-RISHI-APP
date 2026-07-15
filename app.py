@@ -244,7 +244,7 @@ if trading_mode == "📈 Intraday Cash (Shares)":
     buying_power = capital * leverage
     st.sidebar.info(f"Total Buying Power: **₹{buying_power:,}**")
 else:
-    capital = st.sidebar.number_input("Trading Margin (₹)", value=150000, step=10000)
+    capital = st.sidebar.number_input("Trading Margin (₹)", value=170000, step=10000)
     max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=5000, step=250)
     st.sidebar.warning(
         "🛡️ Contracts exceeding your absolute max risk or available margin limits will automatically block."
