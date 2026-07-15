@@ -509,10 +509,10 @@ if trading_mode == "📈 Intraday Cash (Shares)":
         c1.metric("Entry Trigger", f"₹{long_entry}")
         c2.metric(
             "Stop Loss", f"₹{long_sl}",
-            delta=f"{pct_of(long_entry, long_sl)}% (-₹{long_risk}/sh)", delta_color="inverse",
+            delta=f"{pct_of(long_entry, long_sl)}% (-{long_risk} pts)", delta_color="inverse",
         )
-        c3.metric("Target 1 (1:2)", f"₹{long_t1}", delta=f"+{pct_of(long_entry, long_t1)}%")
-        c4.metric("Target 2 (1:3)", f"₹{long_t2}", delta=f"+{pct_of(long_entry, long_t2)}%")
+        c3.metric("Target 1 (1:2)", f"₹{long_t1}", delta=f"+{pct_of(long_entry, long_t1)}% (+{round(long_t1 - long_entry, 2)} pts)")
+        c4.metric("Target 2 (1:3)", f"₹{long_t2}", delta=f"+{pct_of(long_entry, long_t2)}% (+{round(long_t2 - long_entry, 2)} pts)")
     else:
         st.warning(f"⚠️ Long setup for {bullish_stock} unavailable (invalid price/risk).")
 
@@ -531,10 +531,10 @@ if trading_mode == "📈 Intraday Cash (Shares)":
         c1.metric("Entry Trigger", f"₹{short_entry}")
         c2.metric(
             "Stop Loss", f"₹{short_sl}",
-            delta=f"+{pct_of(short_entry, short_sl)}% (+₹{short_risk}/sh)", delta_color="inverse",
+            delta=f"+{pct_of(short_entry, short_sl)}% (+{short_risk} pts)", delta_color="inverse",
         )
-        c3.metric("Target 1 (1:2)", f"₹{short_t1}", delta=f"{pct_of(short_entry, short_t1)}%")
-        c4.metric("Target 2 (1:3)", f"₹{short_t2}", delta=f"{pct_of(short_entry, short_t2)}%")
+        c3.metric("Target 1 (1:2)", f"₹{short_t1}", delta=f"{pct_of(short_entry, short_t1)}% ({round(short_t1 - short_entry, 2)} pts)")
+        c4.metric("Target 2 (1:3)", f"₹{short_t2}", delta=f"{pct_of(short_entry, short_t2)}% ({round(short_t2 - short_entry, 2)} pts)")
     else:
         st.warning(f"⚠️ Short setup for {bearish_stock} unavailable (invalid price/risk).")
 
@@ -569,10 +569,10 @@ else:
             c1.metric(f"{price_tag_bull.split(' (')[0]} Entry Trigger", f"₹{long_entry}")
             c2.metric(
                 "ATR Stop Loss", f"₹{long_sl}",
-                delta=f"{pct_of(long_entry, long_sl)}% (-₹{long_risk}/sh)", delta_color="inverse",
+                delta=f"{pct_of(long_entry, long_sl)}% (-{long_risk} pts)", delta_color="inverse",
             )
-            c3.metric("Target 1 (1:2)", f"₹{long_t1}", delta=f"+{pct_of(long_entry, long_t1)}%")
-            c4.metric("Target 2 (1:3)", f"₹{long_t2}", delta=f"+{pct_of(long_entry, long_t2)}%")
+            c3.metric("Target 1 (1:2)", f"₹{long_t1}", delta=f"+{pct_of(long_entry, long_t1)}% (+{round(long_t1 - long_entry, 2)} pts)")
+            c4.metric("Target 2 (1:3)", f"₹{long_t2}", delta=f"+{pct_of(long_entry, long_t2)}% (+{round(long_t2 - long_entry, 2)} pts)")
     else:
         st.warning(f"⚠️ Long futures setup for {bullish_stock} unavailable.")
 
@@ -605,10 +605,10 @@ else:
             c1.metric(f"{price_tag_bear.split(' (')[0]} Entry Trigger", f"₹{short_entry}")
             c2.metric(
                 "ATR Stop Loss", f"₹{short_sl}",
-                delta=f"+{pct_of(short_entry, short_sl)}% (+₹{short_risk}/sh)", delta_color="inverse",
+                delta=f"+{pct_of(short_entry, short_sl)}% (+{short_risk} pts)", delta_color="inverse",
             )
-            c3.metric("Target 1 (1:2)", f"₹{short_t1}", delta=f"{pct_of(short_entry, short_t1)}%")
-            c4.metric("Target 2 (1:3)", f"₹{short_t2}", delta=f"{pct_of(short_entry, short_t2)}%")
+            c3.metric("Target 1 (1:2)", f"₹{short_t1}", delta=f"{pct_of(short_entry, short_t1)}% ({round(short_t1 - short_entry, 2)} pts)")
+            c4.metric("Target 2 (1:3)", f"₹{short_t2}", delta=f"{pct_of(short_entry, short_t2)}% ({round(short_t2 - short_entry, 2)} pts)")
     else:
         st.warning(f"⚠️ Short futures setup for {bearish_stock} unavailable.")
 
