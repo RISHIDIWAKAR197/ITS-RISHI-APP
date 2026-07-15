@@ -148,14 +148,16 @@ def get_live_futures_quote(symbol: str):
 
     last_err = None
     data = None
-    for attempt in range(NSE_RETRIES):
+    live_attempts = 1  # NSE's quote-derivative endpoint is hard-blocked from this host;
+    # retrying repeatedly just adds latency without changing the outcome.
+    for attempt in range(live_attempts):
         try:
             data = nse_api_fetch(url, referer)
             break
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
             data = None
-        if attempt < NSE_RETRIES - 1:
+        if attempt < live_attempts - 1:
             time.sleep(NSE_RETRY_DELAY)
 
     if data is None:
@@ -394,24 +396,42 @@ if trading_mode == "🔥 Stock Futures (Lots)":
     bear_is_futures = bear_price_tag.startswith(("Live", "EOD"))
 
     if bull_is_futures:
-        bullish_ltp = bull_price
-        st.info(f"⚡ **{bullish_stock}** — {bull_price_tag} = **₹{bullish_ltp}**")
+        st.info(f"⚡ **{bullish_stock}** — {bull_price_tag} = **₹{bull_price}**")
+        if bull_price_tag.startswith("EOD"):
+            st.caption("⏳ This is last-recorded-session data, not live. Verify against your broker terminal below.")
     else:
-        st.warning(f"⚠️ **{bullish_stock}**: futures data unavailable. Using **spot price (₹{bullish_ltp})**.")
+        st.warning(f"⚠️ **{bullish_stock}**: futures data unavailable. Showing **spot price (₹{bull_price})** below.")
         if bull_lot_size is None:
             bull_lot_size = lookup_lot_size(bullish_stock, lot_map)
+    bullish_ltp = st.number_input(
+        f"{bullish_stock} Futures Price - verify/override (₹)",
+        min_value=0.0,
+        value=float(bull_price),
+        step=0.05,
+        key="bull_fut_override",
+        help="Pre-filled from NSE. Overwrite with your broker's live LTP if this looks stale.",
+    )
     if bull_dbg:
         with st.expander(f"🔍 {bullish_stock} futures fetch details"):
             for line in bull_dbg:
                 st.write(line)
 
     if bear_is_futures:
-        bearish_ltp = bear_price
-        st.info(f"⚡ **{bearish_stock}** — {bear_price_tag} = **₹{bearish_ltp}**")
+        st.info(f"⚡ **{bearish_stock}** — {bear_price_tag} = **₹{bear_price}**")
+        if bear_price_tag.startswith("EOD"):
+            st.caption("⏳ This is last-recorded-session data, not live. Verify against your broker terminal below.")
     else:
-        st.warning(f"⚠️ **{bearish_stock}**: futures data unavailable. Using **spot price (₹{bearish_ltp})**.")
+        st.warning(f"⚠️ **{bearish_stock}**: futures data unavailable. Showing **spot price (₹{bear_price})** below.")
         if bear_lot_size is None:
             bear_lot_size = lookup_lot_size(bearish_stock, lot_map)
+    bearish_ltp = st.number_input(
+        f"{bearish_stock} Futures Price - verify/override (₹)",
+        min_value=0.0,
+        value=float(bear_price),
+        step=0.05,
+        key="bear_fut_override",
+        help="Pre-filled from NSE. Overwrite with your broker's live LTP if this looks stale.",
+    )
     if bear_dbg:
         with st.expander(f"🔍 {bearish_stock} futures fetch details"):
             for line in bear_dbg:
