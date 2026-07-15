@@ -129,7 +129,7 @@ if trading_mode == "📈 Intraday Cash (Shares)":
     leverage = st.sidebar.number_input("MIS Leverage (x)", value=5, min_value=1, max_value=5)
     max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=300, step=10)
     buying_power = capital * leverage
-    st.sidebar.info(f"Total Buying Power: *₹{buying_power:,}*")
+    st.sidebar.info(f"Total Buying Power: **₹{buying_power:,}**")
 else:  # Futures Mode
     capital = st.sidebar.number_input("Trading Margin (₹)", value=150000, step=10000)
     max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=5000, step=250)
@@ -142,7 +142,7 @@ atr_multiplier = st.sidebar.number_input("ATR Multiplier", value=1.5, min_value=
 
 # --- MAIN PAGE HEADER ---
 st.title("📊 RISHI's Multi-Asset Momentum Dashboard")
-st.caption(f"Engine Mode: *{trading_mode.upper()}* • System Time: {IST_NOW.strftime('%d %b %Y | %H:%M IST')}")
+st.caption(f"Engine Mode: **{trading_mode.upper()}** • System Time: {IST_NOW.strftime('%d %b %Y | %H:%M IST')}")
 st.markdown("---")
 
 # --- Live Market Feed Section ---
@@ -154,7 +154,7 @@ chosen_feed = st.radio("Select Feed Input Source:", ["🤖 Automated Nifty Scann
 
 try:
     gainers_df = capital_market.top_gainers_or_losers(to_get='gainers')
-    losers_df  = capital_market.top_gainers_or_losers(to_get='losers') # Fixed the 'loosers' library typo
+    losers_df  = capital_market.top_gainers_or_losers(to_get='losers')
     gainers_df.columns = gainers_df.columns.str.strip().str.upper()
     losers_df.columns = losers_df.columns.str.strip().str.upper()
     
@@ -166,7 +166,7 @@ except Exception:
     st.sidebar.warning("⚠️ Live NSE Data Feed is busy/closed. Defaulting to manual mode entry choices.")
 
 if chosen_feed == "🤖 Automated Nifty Scanner":
-    st.success(f"✅ Live NSE Data Active! Top Gainer: *{auto_bullish_stock}* (₹{auto_bullish_ltp}) | Top Loser: *{auto_bearish_stock}* (₹{auto_bearish_ltp})")
+    st.success(f"✅ Live NSE Data Active! Top Gainer: **{auto_bullish_stock}** (₹{auto_bullish_ltp}) | Top Loser: **{auto_bearish_stock}** (₹{auto_bearish_ltp})")
     bullish_stock, bullish_ltp = auto_bullish_stock, auto_bullish_ltp
     bearish_stock, bearish_ltp = auto_bearish_stock, auto_bearish_ltp
 else:
@@ -185,7 +185,7 @@ if trading_mode == "🔥 Stock Futures (Lots)":
     with st.spinner("Fetching matching Near-Month Futures prices..."):
         bullish_ltp = get_futures_ltp(bullish_stock, spot_fallback=bullish_ltp)
         bearish_ltp = get_futures_ltp(bearish_stock, spot_fallback=bearish_ltp)
-    st.info(f"⚡ *Futures Contract Pricing Loaded:* {bullish_stock} Fut = *₹{bullish_ltp}* | {bearish_stock} Fut = *₹{bearish_ltp}*")
+    st.info(f"⚡ **Futures Contract Pricing Loaded:** {bullish_stock} Fut = **₹{bullish_ltp}** | {bearish_stock} Fut = **₹{bearish_ltp}**")
 
 # Fetch Intraday Volatility Reference
 with st.spinner("Fetching historical intraday data from Yahoo Finance..."):
@@ -196,136 +196,164 @@ with st.spinner("Fetching historical intraday data from Yahoo Finance..."):
 # MODULE 1: INTRADAY CASH ENGINE
 # ==========================================
 if trading_mode == "📈 Intraday Cash (Shares)":
-    # --- Long Calculations ---
+    
+    # --- Long Calculations & Render ---
     long_entry = round(bullish_ltp * 1.002, 2)
     atr_sl_dist = round(bull_atr * atr_multiplier, 2) if bull_atr else round(long_entry * 0.005, 2)
     long_sl = round(long_entry - atr_sl_dist, 2)
     long_risk = max(round(long_entry - long_sl, 2), 0.05)
     
-    if long_entry > 0:
+    if long_entry > 0 and long_risk > 0:
         long_qty = max(min(int(max_risk // long_risk), int(buying_power // long_entry)), 1)
         long_target1 = round(long_entry + (long_risk * 2), 2)
         long_target2 = round(long_entry + (long_risk * 3), 2)
-    else:
-        long_qty, long_target1, long_target2 = 0, 0.0, 0.0
+
+        st.success(f"### 📈 INTRADAY CASH LONG: {bullish_stock}")
+        q_col1, q_col2 = st.columns(2)
+        q_col1.info(f"### 🎯 TRADE QUANTITY: **{long_qty} shares**")
+        q_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{round(long_risk * long_qty, 2):,}**")
         
-    # --- Short Calculations (Moved outside the Long Else block to fix execution crash) ---
+        l_col1, l_col2, l_col3, l_col4 = st.columns(4)
+        l_col1.metric("Entry Trigger", f"₹{long_entry}")
+        
+        long_delta_pct = round((long_risk / long_entry) * 100, 2)
+        l_col2.metric("Stop Loss", f"₹{long_sl}", delta=f"-{long_delta_pct}% (-₹{long_risk}/sh)", delta_color="inverse")
+        
+        long_t1_pct = round(((long_target1 - long_entry) / long_entry) * 100, 2)
+        l_col3.metric("Target 1 (1:2)", f"₹{long_target1}", delta=f"+{long_t1_pct}%")
+        
+        long_t2_pct = round(((long_target2 - long_entry) / long_entry) * 100, 2)
+        l_col4.metric("Target 2 (1:3)", f"₹{long_target2}", delta=f"+{long_t2_pct}%")
+    else:
+        st.warning(f"⚠️ Long setups for {bullish_stock} are currently unavailable (Invalid price or zero risk profile).")
+
+    st.markdown("---")
+
+    # --- Short Calculations & Render ---
     short_entry = round(bearish_ltp * 0.998, 2)
     atr_sl_dist_s = round(bear_atr * atr_multiplier, 2) if bear_atr else round(short_entry * 0.005, 2)
     short_sl = round(short_entry + atr_sl_dist_s, 2)
     short_risk = max(round(short_sl - short_entry, 2), 0.05)
     
-    if short_entry > 0:
+    if short_entry > 0 and short_risk > 0:
         short_qty = max(min(int(max_risk // short_risk), int(buying_power // short_entry)), 1)
         short_target1 = round(short_entry - (short_risk * 2), 2)
         short_target2 = round(short_entry - (short_risk * 3), 2)
+
+        st.error(f"### 📉 INTRADAY CASH SHORT: {bearish_stock}")
+        qs_col1, qs_col2 = st.columns(2)
+        qs_col1.info(f"### 🎯 TRADE QUANTITY: **{short_qty} shares**")
+        qs_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{round(short_risk * short_qty, 2):,}**")
+        
+        s_col1, s_col2, s_col3, s_col4 = st.columns(4)
+        s_col1.metric("Entry Trigger", f"₹{short_entry}")
+        
+        short_delta_pct = round((short_risk / short_entry) * 100, 2)
+        s_col2.metric("Stop Loss", f"₹{short_sl}", delta=f"+{short_delta_pct}% (+₹{short_risk}/sh)", delta_color="inverse")
+        
+        short_t1_pct = round(((short_entry - short_target1) / short_entry) * 100, 2)
+        s_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{short_t1_pct}%")
+        
+        short_t2_pct = round(((short_entry - short_target2) / short_entry) * 100, 2)
+        s_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{short_t2_pct}%")
     else:
-        short_qty, short_target1, short_target2 = 0, 0.0, 0.0
-
-    # --- Render: Long ---
-    st.success(f"### 📈 INTRADAY CASH LONG: {bullish_stock}")
-    q_col1, q_col2 = st.columns(2)
-    q_col1.info(f"### 🎯 TRADE QUANTITY: *{long_qty} shares*")
-    q_col2.error(f"### 🛡️ MAX LOSS RISK: *₹{round(long_risk * long_qty, 2):,}*")
-    
-    l_col1, l_col2, l_col3, l_col4 = st.columns(4)
-    l_col1.metric("Entry Trigger", f"₹{long_entry}")
-    l_col2.metric("Stop Loss", f"₹{long_sl}", delta=f"-{round((long_risk/long_entry)*100,2)}% (-₹{long_risk}/sh)", delta_color="inverse")
-    l_col3.metric("Target 1 (1:2)", f"₹{long_target1}", delta=f"+{round(((long_target1-long_entry)/long_entry)*100,2)}%")
-    l_col4.metric("Target 2 (1:3)", f"₹{long_target2}", delta=f"+{round(((long_target2-long_entry)/long_entry)*100,2)}%")
-
-    # --- Render: Short ---
-    st.error(f"### 📉 INTRADAY CASH SHORT: {bearish_stock}")
-    qs_col1, qs_col2 = st.columns(2)
-    qs_col1.info(f"### 🎯 TRADE QUANTITY: *{short_qty} shares*")
-    qs_col2.error(f"### 🛡️ MAX LOSS RISK: *₹{round(short_risk * short_qty, 2):,}*")
-    
-    s_col1, s_col2, s_col3, s_col4 = st.columns(4)
-    s_col1.metric("Entry Trigger", f"₹{short_entry}")
-    s_col2.metric("Stop Loss", f"₹{short_sl}", delta=f"+{round((short_risk/short_entry)*100,2)}% (+₹{short_risk}/sh)", delta_color="inverse")
-    s_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{round(((short_entry-short_target1)/short_entry)*100,2)}%")
-    s_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{round(((short_entry-short_target2)/short_entry)*100,2)}%")
+        st.warning(f"⚠️ Short setups for {bearish_stock} are currently unavailable (Invalid price or zero risk profile).")
 
 # ==========================================
-# MODULE 2: STOCK FUTURES ENGINE (WITH FUTURES LTP & ESTIMATED SPAN CHECKS)
+# MODULE 2: STOCK FUTURES ENGINE
 # ==========================================
 else:
     bull_lot_size = lookup_lot_size(bullish_stock, nse_lot_sizes)
     bear_lot_size = lookup_lot_size(bearish_stock, nse_lot_sizes)
 
-    # --- Calculations: Long Futures using Near-Month Price ---
+    # --- Calculations: Long Futures ---
     long_entry = round(bullish_ltp * 1.002, 2)
     atr_sl_dist_f = round(bull_atr * atr_multiplier, 2) if bull_atr else round(long_entry * 0.005, 2)
     long_sl = round(long_entry - atr_sl_dist_f, 2)
     long_risk = max(round(long_entry - long_sl, 2), 0.05)
-    max_loss_long = round(long_risk * bull_lot_size, 2)
     
-    # Structural Margin Validation (Assuming standard 20% margin requirement for equity contracts)
-    est_margin_required_long = round(long_entry * bull_lot_size * 0.20, 2)
-    
-    long_target1 = round(long_entry + (long_risk * 2), 2)
-    long_target2 = round(long_entry + (long_risk * 3), 2)
+    # --- Render: Long Futures ---
+    st.success(f"### 📈 STOCK FUTURES LONG: {bullish_stock} (NEAR EXPIRY)")
+    if long_entry > 0 and long_risk > 0:
+        max_loss_long = round(long_risk * bull_lot_size, 2)
+        est_margin_required_long = round(long_entry * bull_lot_size * 0.20, 2)
+        long_target1 = round(long_entry + (long_risk * 2), 2)
+        long_target2 = round(long_entry + (long_risk * 3), 2)
 
-    # --- Calculations: Short Futures using Near-Month Price ---
+        if max_loss_long > max_risk:
+            st.error(f"🚫 **TRADE BLOCKED (RISK OUT OF BOUNDS):** Risk is **₹{max_loss_long:,}**, exceeding your allocation parameter of ₹{max_risk}.")
+        elif est_margin_required_long > capital:
+            st.error(f"🚫 **TRADE BLOCKED (INSUFFICIENT CAPITAL):** Upfront margin needed is ~**₹{est_margin_required_long:,}**. Available margin setting is only **₹{capital:,}**.")
+        else:
+            qf_col1, qf_col2 = st.columns(2)
+            qf_col1.info(f"### 🎯 TRADE QUANTITY: **1 Lot ({bull_lot_size} units)**")
+            qf_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{max_loss_long:,}** [PASSED SAFETY CHECKS]")
+            
+            lf_col1, lf_col2, lf_col3, lf_col4 = st.columns(4)
+            lf_col1.metric("Futures Entry Trigger", f"₹{long_entry}")
+            
+            long_f_delta = round((long_risk / long_entry) * 100, 2)
+            lf_col2.metric("ATR Stop Loss", f"₹{long_sl}", delta=f"-{long_f_delta}% (-₹{long_risk}/sh)", delta_color="inverse")
+            
+            long_ft1 = round(((long_target1 - long_entry) / long_entry) * 100, 2)
+            lf_col3.metric("Target 1 (1:2)", f"₹{long_target1}", delta=f"+{long_ft1}%")
+            
+            long_ft2 = round(((long_target2 - long_entry) / long_entry) * 100, 2)
+            lf_col4.metric("Target 2 (1:3)", f"₹{long_target2}", delta=f"+{long_ft2}%")
+            
+            with st.expander("🔍 VIEW LONG FUTURES LOGIC"):
+                st.markdown(f"""
+                * **Why this entry?** Triggers purely off near-expiry contract volume momentum, removing spot-to-futures premium tracking error.
+                * **Dynamic Sizing Rationale:** Checked against a required structural margin of **₹{est_margin_required_long:,}** and approved for deployment. 
+                """)
+    else:
+        st.warning(f"⚠️ Long Futures setups for {bullish_stock} are currently unavailable.")
+
+    st.markdown("---")
+
+    # --- Calculations: Short Futures ---
     short_entry = round(bearish_ltp * 0.998, 2)
     atr_sl_dist_fs = round(bear_atr * atr_multiplier, 2) if bear_atr else round(short_entry * 0.005, 2)
     short_sl = round(short_entry + atr_sl_dist_fs, 2)
     short_risk = max(round(short_sl - short_entry, 2), 0.05)
-    max_loss_short = round(short_risk * bear_lot_size, 2)
     
-    est_margin_required_short = round(short_entry * bear_lot_size * 0.20, 2)
-    
-    short_target1 = round(short_entry - (short_risk * 2), 2)
-    short_target2 = round(short_entry - (short_risk * 3), 2)
-
-    # --- Render: Long Futures ---
-    st.success(f"### 📈 STOCK FUTURES LONG: {bullish_stock} (NEAR EXPIRY)")
-    if max_loss_long > max_risk:
-        st.error(f"🚫 *TRADE BLOCKED (RISK OUTOF BOUNDS):* Risk is *₹{max_loss_long:,}*, exceeding your allocation parameter of ₹{max_risk}.")
-    elif est_margin_required_long > capital:
-        st.error(f"🚫 *TRADE BLOCKED (INSUFFICIENT CAPITAL):* Upfront margin needed is ~*₹{est_margin_required_long:,}. Available margin setting is only *₹{capital:,}**.")
-    else:
-        qf_col1, qf_col2 = st.columns(2)
-        qf_col1.info(f"### 🎯 TRADE QUANTITY: *1 Lot ({bull_lot_size} units)*")
-        qf_col2.error(f"### 🛡️ MAX LOSS RISK: *₹{max_loss_long:,}* [PASSED SAFETY CHECKS]")
-        
-        lf_col1, lf_col2, lf_col3, lf_col4 = st.columns(4)
-        lf_col1.metric("Futures Entry Trigger", f"₹{long_entry}")
-        lf_col2.metric(f"ATR Stop Loss", f"₹{long_sl}", delta=f"-{round((long_risk/long_entry)*100,2)}% (-₹{long_risk}/sh)", delta_color="inverse")
-        lf_col3.metric("Target 1 (1:2)", f"₹{long_target1}", delta=f"+{round(((long_target1-long_entry)/long_entry)*100,2)}%")
-        lf_col4.metric("Target 2 (1:3)", f"₹{long_target2}", delta=f"+{round(((long_target2-long_entry)/long_entry)*100,2)}%")
-        
-        with st.expander("🔍 VIEW LONG FUTURES LOGIC"):
-            st.markdown(f"""
-            * *Why this entry?* Triggers purely off near-expiry contract volume momentum, removing spot-to-futures premium tracking error.
-            * *Dynamic Sizing Rationale:* Checked against a required structural margin of *₹{est_margin_required_long:,}* and approved for deployment. 
-            """)
-
-    st.markdown("---")
-
     # --- Render: Short Futures ---
     st.error(f"### 📉 STOCK FUTURES SHORT: {bearish_stock} (NEAR EXPIRY)")
-    if max_loss_short > max_risk:
-        st.error(f"🚫 *TRADE BLOCKED (RISK OUTOF BOUNDS):* Risk is *₹{max_loss_short:,}*, exceeding your allocation parameter of ₹{max_risk}.")
-    elif est_margin_required_short > capital:
-        st.error(f"🚫 *TRADE BLOCKED (INSUFFICIENT CAPITAL):* Upfront margin needed is ~*₹{est_margin_required_short:,}. Available margin setting is only *₹{capital:,}**.")
+    if short_entry > 0 and short_risk > 0:
+        max_loss_short = round(short_risk * bear_lot_size, 2)
+        est_margin_required_short = round(short_entry * bear_lot_size * 0.20, 2)
+        short_target1 = round(short_entry - (short_risk * 2), 2)
+        short_target2 = round(short_entry - (short_risk * 3), 2)
+
+        if max_loss_short > max_risk:
+            st.error(f"🚫 **TRADE BLOCKED (RISK OUT OF BOUNDS):** Risk is **₹{max_loss_short:,}**, exceeding your allocation parameter of ₹{max_risk}.")
+        elif est_margin_required_short > capital:
+            st.error(f"🚫 **TRADE BLOCKED (INSUFFICIENT CAPITAL):** Upfront margin needed is ~**₹{est_margin_required_short:,}**. Available margin setting is only **₹{capital:,}**.")
+        else:
+            qfs_col1, qfs_col2 = st.columns(2)
+            qfs_col1.info(f"### 🎯 TRADE QUANTITY: **1 Lot ({bear_lot_size} units)**")
+            qfs_col2.error(f"### 🛡️ MAX LOSS RISK: **₹{max_loss_short:,}** [PASSED SAFETY CHECKS]")
+            
+            sf_col1, sf_col2, sf_col3, sf_col4 = st.columns(4)
+            sf_col1.metric("Futures Entry Trigger", f"₹{short_entry}")
+            
+            short_f_delta = round((short_risk / short_entry) * 100, 2)
+            sf_col2.metric("ATR Stop Loss", f"₹{short_sl}", delta=f"+{short_f_delta}% (+₹{short_risk}/sh)", delta_color="inverse")
+            
+            short_ft1 = round(((short_entry - short_target1) / short_entry) * 100, 2)
+            sf_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{short_ft1}%")
+            
+            short_ft2 = round(((short_entry - short_target2) / short_entry) * 100, 2)
+            sf_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{short_ft2}%")
+            
+            with st.expander("🔍 VIEW SHORT FUTURES LOGIC"):
+                st.markdown(f"""
+                * **Why this entry?** Triggers automatically on hard resistance breakdown inside the active liquid derivative contract.
+                * **Dynamic Sizing Rationale:** Estimated margin deployment stays safely within bounds at ~**₹{est_margin_required_short:,}**.
+                """)
     else:
-        qfs_col1, qfs_col2 = st.columns(2)
-        qfs_col1.info(f"### 🎯 TRADE QUANTITY: *1 Lot ({bear_lot_size} units)*")
-        qfs_col2.error(f"### 🛡️ MAX LOSS RISK: *₹{max_loss_short:,}* [PASSED SAFETY CHECKS]")
-        
-        sf_col1, sf_col2, sf_col3, sf_col4 = st.columns(4)
-        sf_col1.metric("Futures Entry Trigger", f"₹{short_entry}")
-        sf_col2.metric(f"ATR Stop Loss", f"₹{short_sl}", delta=f"+{round((short_risk/short_entry)*100,2)}% (+₹{short_risk}/sh)", delta_color="inverse")
-        sf_col3.metric("Target 1 (1:2)", f"₹{short_target1}", delta=f"-{round(((short_entry-short_target1)/short_entry)*100,2)}%")
-        sf_col4.metric("Target 2 (1:3)", f"₹{short_target2}", delta=f"-{round(((short_entry-short_target2)/short_entry)*100,2)}%")
-        
-        with st.expander("🔍 VIEW SHORT FUTURES LOGIC"):
-            st.markdown(f"""
-            * *Why this entry?* Triggers automatically on hard resistance breakdown inside the active liquid derivative contract.
-            * *Dynamic Sizing Rationale:* Estimated margin deployment stays safely within bounds at ~*₹{est_margin_required_short:,}*.
-            """)
+        st.warning(f"⚠️ Short Futures setups for {bearish_stock} are currently unavailable.")
 
 # --- Shared Footer Guardrails ---
 st.markdown("---")
-st.warning("⚠️ *Execution Guardrail:* Always deploy these setups using *SL-Limit (MIS/NRML)* orders directly within your broker terminal. Do not use market orders to avoid execution slippage.")
+st.warning("⚠️ **Execution Guardrail:** Always deploy these setups using **SL-Limit (MIS/NRML)** orders directly within your broker terminal. Do not use market orders to avoid execution slippage.")
