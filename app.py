@@ -1,5 +1,6 @@
 import time
 import logging
+import io
 from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
@@ -7,7 +8,7 @@ import streamlit as st
 import yfinance as yf
 from nselib import capital_market
 
-# --- FIXED LOGGING SETUP (Bug 5) ---
+# --- SYSTEM LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ if "error_logs" not in st.session_state:
     st.session_state.error_logs = {}
 
 # ============================================================
-# DATA ACCURACY & MATRICES HELPERS (ADX Corrected - Bug 4)
+# DATA ACCURACY & MATRICES HELPERS
 # ============================================================
 def wilders_moving_average(series: pd.Series, period: int = 14) -> pd.Series:
     """Computes a true Welles Wilder Moving Average at every index step."""
@@ -39,10 +40,7 @@ def wilders_moving_average(series: pd.Series, period: int = 14) -> pd.Series:
     if len(vals) < period:
         return pd.Series(out, index=series.index)
     
-    # Initialize seed with a simple moving average
     out[period - 1] = np.mean(vals[:period])
-    
-    # Recurse using Wilder's exact smoothing standard
     for i in range(period, len(vals)):
         out[i] = (out[i - 1] * (period - 1) + vals[i]) / period
         
@@ -64,7 +62,7 @@ def nse_call(fn, *args, **kwargs):
         try:
             result = fn(*args, **kwargs)
             if result is None or (isinstance(result, pd.DataFrame) and result.empty):
-                last_err = "Empty response received."
+                last_err = "Empty response received from exchange gateway."
             else:
                 return result, None
         except Exception as e:
@@ -73,32 +71,46 @@ def nse_call(fn, *args, **kwargs):
             time.sleep(NSE_RETRY_DELAY)
     return None, last_err
 
-# --- CACHED LOT MATRIX RESILIENCY (Bug 3) ---
+# ============================================================
+# ACCURATE LIVE F&O LOT DATA ROUTING WITH SAFEGUARD GATING
+# ============================================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_fno_lot_sizes():
-    """Fetches F&O lot sizes with robust hardcoded network fallbacks."""
-    fallback = {
-        "RELIANCE": 250, "TATASTEEL": 5500, "LT": 300, "MARUTI": 100, "M&M": 400,
-        "BHARTARTL": 950, "NTPC": 1500, "POWERGRID": 3600, "COALINDIA": 1250, 
-        "ULTRACEMCO": 100, "GRASIM": 400, "JSL": 1000, "JINDALSTEL": 1250, 
-        "HINDALCO": 1400, "BEL": 2850, "BHEL": 5250
+    """
+    Fetches F&O lot sizes directly from active nselib infrastructure.
+    If live tracking drops, returns fallback status and context.
+    """
+    # ⚠️ LAST CONFIRMED MANUALLY VIA NSE REGULATORY DISPATCHES: 2026-07-20
+    FALLBACK_LOT_SIZES = {
+        "RELIANCE": 500, "BHEL": 2625, "TATASTEEL": 5500, "LT": 300, 
+        "MARUTI": 100, "M&M": 400, "BHARTARTL": 475, "NTPC": 1500, 
+        "POWERGRID": 3600, "COALINDIA": 1350, "ULTRACEMCO": 100, 
+        "GRASIM": 400, "JSL": 1000, "JINDALSTEL": 1250, "HINDALCO": 700, 
+        "BEL": 1425
     }
+    fallback_date_str = "2026-07-20"
+    
     df, err = nse_call(capital_market.fno_equity_list)
     if err or df is None or "SYMBOL" not in df.columns or "LOT SIZE" not in df.columns:
-        return fallback
+        return FALLBACK_LOT_SIZES, True, fallback_date_str
+        
     try:
         df.columns = [str(c).strip().upper() for c in df.columns]
         lots = pd.to_numeric(df["LOT SIZE"], errors="coerce")
         lot_map = dict(zip(df["SYMBOL"].str.strip().str.upper(), lots))
-        return {k: int(v) for k, v in lot_map.items() if pd.notna(v)}
+        cleaned_map = {k: int(v) for k, v in lot_map.items() if pd.notna(v)}
+        
+        if not cleaned_map:
+            return FALLBACK_LOT_SIZES, True, fallback_date_str
+            
+        return cleaned_map, False, None
     except Exception:
-        return fallback
+        return FALLBACK_LOT_SIZES, True, fallback_date_str
 
 # ============================================================
 # QUANT MOMENTUM SCANNER ENGINE
 # ============================================================
 def fetch_momentum_metrics(symbol: str, benchmark_df: pd.DataFrame):
-    """Calculates Technical Indicators with Standard Wilder's Metrics."""
     ticker = f"{symbol.strip().upper()}.NS"
     try:
         df = yf.download(tickers=ticker, period="5d", interval="5m", progress=False, auto_adjust=True)
@@ -111,7 +123,6 @@ def fetch_momentum_metrics(symbol: str, benchmark_df: pd.DataFrame):
         df["EMA_20"] = df["Close"].ewm(span=20, adjust=False).mean()
         df["ROC"] = ((df["Close"] - df["Close"].shift(14)) / df["Close"].shift(14)) * 100
         
-        # Standard Wilder's DMI/ADX Logic
         high_diff = df["High"].diff()
         low_diff = df["Low"].diff(1).multiply(-1)
         
@@ -129,7 +140,6 @@ def fetch_momentum_metrics(symbol: str, benchmark_df: pd.DataFrame):
         smoothed_plus_dm = wilders_moving_average(pd.Series(plus_dm, index=df.index), 14)
         smoothed_minus_dm = wilders_moving_average(pd.Series(minus_dm, index=df.index), 14)
         
-        # Standardized Scaling Assured via exact WMA outputs
         df["+DI"] = 100 * (smoothed_plus_dm / np.where(smoothed_tr != 0, smoothed_tr, 1.0))
         df["-DI"] = 100 * (smoothed_minus_dm / np.where(smoothed_tr != 0, smoothed_tr, 1.0))
         
@@ -176,15 +186,13 @@ def scan_industrial_universe():
     return res_df.sort_values(by="Score", ascending=False)
 
 # ============================================================
-# PERFORMANCE BATCHED HISTORICAL BACKTEST ENGINE (Bug 6)
+# PERFORMANCE BATCHED HISTORICAL BACKTEST ENGINE
 # ============================================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def execute_historical_backtest(days_to_test=5):
-    """Performs batched high-speed historic simulation across structural windows."""
     tickers = [f"{s}.NS" for s in INDUSTRIAL_UNIVERSE]
     all_tickers = tickers + ["^NSEI"]
     
-    # Batch download all required tickers to prevent rate limits
     data_cluster = yf.download(tickers=all_tickers, period=f"{days_to_test + 4}d", interval="5m", progress=False)
     if data_cluster.empty:
         return []
@@ -235,7 +243,6 @@ def execute_historical_backtest(days_to_test=5):
             
         rank_df = pd.DataFrame(ranking_list).sort_values(by="RS", ascending=False)
         
-        # Simulate Long Vector
         long_pick = rank_df.iloc[0]
         l_trigger = long_pick["Session_Data"]["Open"].iloc[0] * 1.0015
         l_sl = l_trigger - (long_pick["ATR_Ref"] * 2.0)
@@ -257,7 +264,7 @@ def execute_historical_backtest(days_to_test=5):
     return trades
 
 # ============================================================
-# LAYOUT VIEWPORTS & RISK PARSING
+# LAYOUT VIEWPORTS & INTERFACE RENDER
 # ============================================================
 st.sidebar.header("🕹️ Control Center")
 trading_mode = st.sidebar.radio("Choose Your Trading Mode:", ["📈 Intraday Cash (Shares)", "🔥 Stock Futures (Lots)"])
@@ -282,6 +289,29 @@ tab_live, tab_backtest = st.tabs(["📡 Real-Time Momentum Scanner", "🧮 Strat
 with tab_live:
     st.title("🏭 High-Velocity Industrial Engine")
     
+    # Run the live data checks for underlying F&O parameters
+    lot_dict, using_fallback, fallback_date = get_fno_lot_sizes()
+    
+    # Gating Check if Live Connection Fails
+    if using_fallback:
+        st.error(
+            f"### 🛑 EXCHANGE CONNECTION INTERRUPTED\n"
+            f"The system was unable to pull live parameters via `nselib`. To protect execution matrices "
+            f"from trading on stale, unverified values, operations have been locked."
+        )
+        st.warning(
+            f"⚠️ Emergency fallback data matrix is available (Last verified: **{fallback_date}**).\n\n"
+            f"Since NSE alters contract lot configurations periodically, using these numbers without validation "
+            f"poses a critical risk of flawed size sizing."
+        )
+        
+        override_lockout = st.checkbox("I have manually verified my broker terminal lot targets and wish to override.")
+        if not override_lockout:
+            st.info("💡 **Awaiting validation:** Execution pipeline halted until override check is selected.")
+            st.stop()
+        else:
+            st.warning("⚠️ Running on manual override validation using static historical values. Double-check margin bounds.")
+
     col_run, col_time = st.columns([1, 3])
     with col_run:
         trigger_scan = st.button("🔄 Run Scanner / Sync Terminals", use_container_width=True)
@@ -340,8 +370,6 @@ with tab_live:
             c3.metric("Target 1 (1:2)", f"₹{l_t1}")
             c4.metric("Target 2 (1:3)", f"₹{l_t2}")
         else:
-            # --- DERIVATIVES RISK CONTROLS & LOCKOUTS (Bug 2) ---
-            lot_dict = get_fno_lot_sizes()
             lot_size_long = lot_dict.get(bullish_candidate['Symbol'], 1)
             max_loss_long = round(l_risk * lot_size_long, 2)
             margin_req_long = round(l_trig * lot_size_long * 0.22, 2)
@@ -362,7 +390,7 @@ with tab_live:
         
         st.markdown("---")
         
-        # --- SHORT SETUP VECTOR (Variables Fixed - Bug 1) ---
+        # --- SHORT SETUP VECTOR ---
         st.error("### 📉 DISTRESSED SHORT CHANNEL DISPATCH")
         if short_filtered_pool.empty:
             st.info("ℹ️ **No valid short setups found.** No industrial assets meet the necessary mathematical parameters for short positions (RS < 0 and ROC < 0).")
@@ -381,8 +409,6 @@ with tab_live:
                 c3.metric("Target 1 (1:2)", f"₹{s_t1}")
                 c4.metric("Target 2 (1:3)", f"₹{s_t2}")
             else:
-                # --- SHORT DERIVATIVES RISK CONTROLS & LOCKOUTS (Bug 2) ---
-                lot_dict = get_fno_lot_sizes()
                 lot_size_short = lot_dict.get(bearish_candidate['Symbol'], 1)
                 max_loss_short = round(s_risk * lot_size_short, 2)
                 margin_req_short = round(s_trig * lot_size_short * 0.22, 2)
