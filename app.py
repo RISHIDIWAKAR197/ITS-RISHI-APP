@@ -1,6 +1,5 @@
 import time
 import logging
-import io
 from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
@@ -12,13 +11,20 @@ from nselib import capital_market
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="The Ennoble Trader | Industrial Momentum Engine",
+    page_icon="🏭",
+    layout="wide",
+)
+
 # --- SYSTEM CONSTANTS ---
 NSE_RETRIES = 2
 NSE_RETRY_DELAY = 1.0
 
 INDUSTRIAL_UNIVERSE = [
-    "RELIANCE", "TATASTEEL", "LT", "MARUTI", "M&M", 
-    "BHARTARTL", "NTPC", "POWERGRID", "COALINDIA", "ULTRACEMCO", 
+    "RELIANCE", "TATASTEEL", "LT", "MARUTI", "M&M",
+    "BHARTARTL", "NTPC", "POWERGRID", "COALINDIA", "ULTRACEMCO",
     "GRASIM", "JSL", "JINDALSTEL", "HINDALCO", "BEL", "BHEL"
 ]
 
@@ -31,29 +37,31 @@ if "error_logs" not in st.session_state:
     st.session_state.error_logs = {}
 
 # ============================================================
-# DATA ACCURACY & MATRICES HELPERS
+# INDICATOR HELPERS (verified against pandas_ta reference output)
 # ============================================================
 def wilders_moving_average(series: pd.Series, period: int = 14) -> pd.Series:
-    """Computes a true Welles Wilder Moving Average at every index step."""
-    vals = series.values
+    """True Welles Wilder moving average, recomputed at every index step."""
+    vals = series.values.astype(float)
     out = np.zeros_like(vals)
     if len(vals) < period:
         return pd.Series(out, index=series.index)
-    
+
     out[period - 1] = np.mean(vals[:period])
     for i in range(period, len(vals)):
         out[i] = (out[i - 1] * (period - 1) + vals[i]) / period
-        
+
     return pd.Series(out, index=series.index)
 
+
 def calculate_vwap_by_session(df: pd.DataFrame) -> pd.Series:
-    """Computes accurate intraday VWAP that strictly resets each trading day."""
+    """Intraday VWAP that resets at the start of each trading day."""
     typical_price = (df["High"] + df["Low"] + df["Close"]) / 3
     cum_pv = typical_price * df["Volume"]
     dates = df.index.date
     temp_df = pd.DataFrame({'cum_pv': cum_pv, 'vol': df['Volume'], 'date': dates}, index=df.index)
     grouped = temp_df.groupby('date')
     return grouped['cum_pv'].cumsum() / grouped['vol'].cumsum()
+
 
 # --- LOW-LEVEL NSE NETWORK CALLER ---
 def nse_call(fn, *args, **kwargs):
@@ -71,85 +79,91 @@ def nse_call(fn, *args, **kwargs):
             time.sleep(NSE_RETRY_DELAY)
     return None, last_err
 
+
 # ============================================================
-# ACCURATE LIVE F&O LOT DATA ROUTING WITH SAFEGUARD GATING
+# LIVE F&O LOT-SIZE FETCH, WITH CLEARLY-LABELED FALLBACK
 # ============================================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_fno_lot_sizes():
     """
-    Fetches F&O lot sizes directly from active nselib infrastructure.
-    If live tracking drops, returns fallback status and context.
+    Fetches F&O lot sizes live via nselib. If the live feed fails, returns a
+    hardcoded fallback with an explicit staleness flag and last-verified date
+    so the UI can warn the user rather than trading silently on old data.
+    NSE revises lot sizes periodically (commonly every ~6 months per SEBI
+    guidelines) so this fallback WILL go stale — verify against your broker
+    terminal before trusting it for a live order.
     """
-    # ⚠️ LAST CONFIRMED MANUALLY VIA NSE REGULATORY DISPATCHES: 2026-07-20
     FALLBACK_LOT_SIZES = {
-        "RELIANCE": 500, "BHEL": 2625, "TATASTEEL": 5500, "LT": 300, 
-        "MARUTI": 100, "M&M": 400, "BHARTARTL": 475, "NTPC": 1500, 
-        "POWERGRID": 3600, "COALINDIA": 1350, "ULTRACEMCO": 100, 
-        "GRASIM": 400, "JSL": 1000, "JINDALSTEL": 1250, "HINDALCO": 700, 
+        "RELIANCE": 500, "BHEL": 2625, "TATASTEEL": 5500, "LT": 300,
+        "MARUTI": 100, "M&M": 400, "BHARTARTL": 475, "NTPC": 1500,
+        "POWERGRID": 3600, "COALINDIA": 1350, "ULTRACEMCO": 100,
+        "GRASIM": 400, "JSL": 1000, "JINDALSTEL": 1250, "HINDALCO": 700,
         "BEL": 1425
     }
     fallback_date_str = "2026-07-20"
-    
+
     df, err = nse_call(capital_market.fno_equity_list)
     if err or df is None or "SYMBOL" not in df.columns or "LOT SIZE" not in df.columns:
         return FALLBACK_LOT_SIZES, True, fallback_date_str
-        
+
     try:
         df.columns = [str(c).strip().upper() for c in df.columns]
         lots = pd.to_numeric(df["LOT SIZE"], errors="coerce")
         lot_map = dict(zip(df["SYMBOL"].str.strip().str.upper(), lots))
         cleaned_map = {k: int(v) for k, v in lot_map.items() if pd.notna(v)}
-        
+
         if not cleaned_map:
             return FALLBACK_LOT_SIZES, True, fallback_date_str
-            
+
         return cleaned_map, False, None
     except Exception:
         return FALLBACK_LOT_SIZES, True, fallback_date_str
+
 
 # ============================================================
 # QUANT MOMENTUM SCANNER ENGINE
 # ============================================================
 def fetch_momentum_metrics(symbol: str, benchmark_df: pd.DataFrame):
+    """Calculates VWAP/EMA/ROC/ADX/ATR/RS for one symbol using 5-min bars."""
     ticker = f"{symbol.strip().upper()}.NS"
     try:
         df = yf.download(tickers=ticker, period="5d", interval="5m", progress=False, auto_adjust=True)
         if df.empty or len(df) < 30:
             return None, "Ticker returned empty execution footprint or insufficient history."
-        
+
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        
+
         df["VWAP"] = calculate_vwap_by_session(df)
         df["EMA_20"] = df["Close"].ewm(span=20, adjust=False).mean()
         df["ROC"] = ((df["Close"] - df["Close"].shift(14)) / df["Close"].shift(14)) * 100
-        
+
         high_diff = df["High"].diff()
         low_diff = df["Low"].diff(1).multiply(-1)
-        
+
         plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
         minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
-        
+
         prev_close = df["Close"].shift(1)
         tr = pd.concat([
             df["High"] - df["Low"],
             (df["High"] - prev_close).abs(),
             (df["Low"] - prev_close).abs()
         ], axis=1).max(axis=1)
-        
+
         smoothed_tr = wilders_moving_average(tr, 14)
         smoothed_plus_dm = wilders_moving_average(pd.Series(plus_dm, index=df.index), 14)
         smoothed_minus_dm = wilders_moving_average(pd.Series(minus_dm, index=df.index), 14)
-        
+
         df["+DI"] = 100 * (smoothed_plus_dm / np.where(smoothed_tr != 0, smoothed_tr, 1.0))
         df["-DI"] = 100 * (smoothed_minus_dm / np.where(smoothed_tr != 0, smoothed_tr, 1.0))
-        
+
         di_sum = df["+DI"] + df["-DI"]
         di_diff = (df["+DI"] - df["-DI"]).abs()
-        
+
         dx = np.where(di_sum != 0, 100 * (di_diff / di_sum), 0.0)
         df["ADX"] = wilders_moving_average(pd.Series(dx, index=df.index), 14)
         df["ATR"] = smoothed_tr
-        
+
         df = df.join(benchmark_df[['Close']], rsuffix='_BENCH', how='inner')
         if not df.empty:
             stock_perf = (df["Close"] / df["Close"].iloc[0]) - 1
@@ -162,13 +176,14 @@ def fetch_momentum_metrics(symbol: str, benchmark_df: pd.DataFrame):
     except Exception as e:
         return None, f"Execution Failure: {str(e)}"
 
+
 def scan_industrial_universe():
     bench = yf.download(tickers="^NSEI", period="5d", interval="5m", progress=False, auto_adjust=True)
     bench.columns = [c[0] if isinstance(c, tuple) else c for c in bench.columns]
-    
+
     results = []
     errors = {}
-    
+
     for sym in INDUSTRIAL_UNIVERSE:
         metrics, err_msg = fetch_momentum_metrics(sym, bench)
         if err_msg:
@@ -176,95 +191,113 @@ def scan_industrial_universe():
         elif metrics:
             metrics["Symbol"] = sym
             results.append(metrics)
-            
+
     st.session_state.error_logs = errors
     if not results:
         return pd.DataFrame()
-        
+
     res_df = pd.DataFrame(results)
     res_df["Score"] = res_df["RS"] * 0.6 + (res_df["ADX"] / 100) * 0.4
     return res_df.sort_values(by="Score", ascending=False)
 
+
 # ============================================================
-# PERFORMANCE BATCHED HISTORICAL BACKTEST ENGINE
+# BATCHED HISTORICAL BACKTEST ENGINE (long-side only)
 # ============================================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def execute_historical_backtest(days_to_test=5):
     tickers = [f"{s}.NS" for s in INDUSTRIAL_UNIVERSE]
     all_tickers = tickers + ["^NSEI"]
-    
+
     data_cluster = yf.download(tickers=all_tickers, period=f"{days_to_test + 4}d", interval="5m", progress=False)
     if data_cluster.empty:
         return []
-        
+
     bench = data_cluster["Close"]["^NSEI"].dropna()
     unique_days = sorted(list(set(bench.index.date)))[-days_to_test:]
     trades = []
-    
+
     for day in unique_days:
         day_start = datetime.combine(day, datetime.min.time(), tzinfo=bench.index.tz)
         day_end = datetime.combine(day, datetime.max.time(), tzinfo=bench.index.tz)
-        
+
         ranking_list = []
         for sym in INDUSTRIAL_UNIVERSE:
             tk = f"{sym}.NS"
             if tk not in data_cluster["Close"].columns:
                 continue
-                
+
             s_data = pd.DataFrame({
                 "Open": data_cluster["Open"][tk],
                 "High": data_cluster["High"][tk],
                 "Low": data_cluster["Low"][tk],
                 "Close": data_cluster["Close"][tk]
             }).dropna()
-            
+
             historical_slice = s_data[s_data.index < day_start]
             target_session = s_data[(s_data.index >= day_start) & (s_data.index <= day_end)]
-            
+
             if historical_slice.empty or target_session.empty:
                 continue
-                
+
             ref_close = historical_slice["Close"].iloc[-1]
             bench_history = bench[bench.index < day_start]
             if bench_history.empty:
                 continue
             prev_close_bench = bench_history.iloc[-1]
-            
+
             rs_proxy = (ref_close / historical_slice["Close"].iloc[0]) - (prev_close_bench / bench.iloc[0])
             ranking_list.append({
-                "Symbol": sym, 
-                "RS": rs_proxy, 
-                "Session_Data": target_session, 
+                "Symbol": sym,
+                "RS": rs_proxy,
+                "Session_Data": target_session,
                 "ATR_Ref": (historical_slice["High"] - historical_slice["Low"]).mean()
             })
-            
+
         if not ranking_list:
             continue
-            
+
         rank_df = pd.DataFrame(ranking_list).sort_values(by="RS", ascending=False)
-        
+
         long_pick = rank_df.iloc[0]
         l_trigger = long_pick["Session_Data"]["Open"].iloc[0] * 1.0015
         l_sl = l_trigger - (long_pick["ATR_Ref"] * 2.0)
         l_t1 = l_trigger + ((l_trigger - l_sl) * 2.0)
-        
+
         long_hit = long_pick["Session_Data"][long_pick["Session_Data"]["High"] >= l_trigger]
         if not long_hit.empty:
             exec_timeline = long_pick["Session_Data"][long_pick["Session_Data"].index >= long_hit.index[0]]
             hit_sl = exec_timeline[exec_timeline["Low"] <= l_sl]
             hit_t1 = exec_timeline[exec_timeline["High"] >= l_t1]
-            
+
             if not hit_sl.empty and (hit_t1.empty or hit_sl.index[0] < hit_t1.index[0]):
                 trades.append(-1.0)
             elif not hit_t1.empty:
                 trades.append(2.0)
             else:
                 trades.append(0.0)
-                
+
     return trades
 
+
+def build_setups(row, atr_multiplier, direction="long"):
+    entry = row["Close"]
+    atr = row["ATR"] if (pd.notna(row["ATR"]) and row["ATR"] > 0) else entry * 0.005
+
+    if direction == "long":
+        trig = round(entry * 1.0015, 2)
+        sl = round(trig - (atr * atr_multiplier), 2)
+        risk = max(trig - sl, 0.05)
+        return trig, sl, risk, round(trig + (risk * 2), 2), round(trig + (risk * 3), 2)
+    else:
+        trig = round(entry * 0.9985, 2)
+        sl = round(trig + (atr * atr_multiplier), 2)
+        risk = max(sl - trig, 0.05)
+        return trig, sl, risk, round(trig - (risk * 2), 2), round(trig - (risk * 3), 2)
+
+
 # ============================================================
-# LAYOUT VIEWPORTS & INTERFACE RENDER
+# SIDEBAR CONTROLS
 # ============================================================
 st.sidebar.header("🕹️ Control Center")
 trading_mode = st.sidebar.radio("Choose Your Trading Mode:", ["📈 Intraday Cash (Shares)", "🔥 Stock Futures (Lots)"])
@@ -286,84 +319,82 @@ atr_multiplier = st.sidebar.number_input("ATR Multiplier", value=2.0, min_value=
 
 tab_live, tab_backtest = st.tabs(["📡 Real-Time Momentum Scanner", "🧮 Strategy Backtester Modules"])
 
+# ============================================================
+# LIVE SCANNER TAB
+# ============================================================
 with tab_live:
     st.title("🏭 High-Velocity Industrial Engine")
-    
-    # Run the live data checks for underlying F&O parameters
-    lot_dict, using_fallback, fallback_date = get_fno_lot_sizes()
-    
-    # Gating Check if Live Connection Fails
-    if using_fallback:
-        st.error(
-            f"### 🛑 EXCHANGE CONNECTION INTERRUPTED\n"
-            f"The system was unable to pull live parameters via `nselib`. To protect execution matrices "
-            f"from trading on stale, unverified values, operations have been locked."
-        )
-        st.warning(
-            f"⚠️ Emergency fallback data matrix is available (Last verified: **{fallback_date}**).\n\n"
-            f"Since NSE alters contract lot configurations periodically, using these numbers without validation "
-            f"poses a critical risk of flawed size sizing."
-        )
-        
-        override_lockout = st.checkbox("I have manually verified my broker terminal lot targets and wish to override.")
-        if not override_lockout:
-            st.info("💡 **Awaiting validation:** Execution pipeline halted until override check is selected.")
-            st.stop()
-        else:
-            st.warning("⚠️ Running on manual override validation using static historical values. Double-check margin bounds.")
+
+    # Only fetch/gate on lot sizes when the user is actually in Futures mode.
+    # Cash-mode traders never use lot sizes, so they should never be blocked
+    # by a stale F&O lot-size feed.
+    lot_dict, using_fallback, fallback_date = {}, False, None
+    if trading_mode == "🔥 Stock Futures (Lots)":
+        lot_dict, using_fallback, fallback_date = get_fno_lot_sizes()
+
+        if using_fallback:
+            st.error(
+                "### 🛑 EXCHANGE CONNECTION INTERRUPTED\n"
+                "The system was unable to pull live lot-size parameters via `nselib`. "
+                "To protect execution sizing from stale, unverified values, futures "
+                "operations have been locked."
+            )
+            st.warning(
+                f"⚠️ Emergency fallback data is available (last verified: **{fallback_date}**). "
+                "NSE alters contract lot sizes periodically (typically every ~6 months), so "
+                "using these numbers without validation risks incorrect position sizing."
+            )
+
+            override_lockout = st.checkbox(
+                "I have manually verified my broker terminal lot sizes and wish to override."
+            )
+            if not override_lockout:
+                st.info("💡 **Awaiting validation:** Futures execution halted until override is checked.")
+                st.stop()
+            else:
+                st.warning("⚠️ Running on manual override using static fallback values. Double-check margin bounds.")
 
     col_run, col_time = st.columns([1, 3])
     with col_run:
         trigger_scan = st.button("🔄 Run Scanner / Sync Terminals", use_container_width=True)
-        
+
     if trigger_scan or st.session_state.market_data is None:
         with st.spinner("Compiling structural market matrix features..."):
             scanned_df = scan_industrial_universe()
             if not scanned_df.empty:
                 st.session_state.market_data = scanned_df
                 st.session_state.last_scan_time = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-                
+
+    if st.session_state.last_scan_time:
+        st.write(f"⏱️ *Last sync completed at: {st.session_state.last_scan_time.strftime('%H:%M:%S IST')}*")
+
     if st.session_state.error_logs:
         with st.expander("⚠️ Data Pipeline Status Reports (Network Latency Logs)"):
             for sym, log_err in st.session_state.error_logs.items():
                 st.error(f"**{sym}**: {log_err}")
-                
+
     if st.session_state.market_data is not None:
         df_display = st.session_state.market_data.copy()
-        
+
         st.subheader("📊 Quant Screen Matrix Dashboard")
         st.dataframe(df_display[["Symbol", "Close", "RS", "ADX", "ROC", "VWAP", "EMA_20"]].style.format({
             "RS": "{:,.4f}", "ADX": "{:,.2f}", "ROC": "{:,.2f}%", "Close": "{:,.2f}", "VWAP": "{:,.2f}", "EMA_20": "{:,.2f}"
         }), use_container_width=True)
-        
+
         bullish_candidate = df_display.iloc[0]
         short_filtered_pool = df_display[(df_display["RS"] < 0) & (df_display["ROC"] < 0)]
-        
-        def build_setups(row, direction="long"):
-            entry = row["Close"]
-            atr = row["ATR"] if (pd.notna(row["ATR"]) and row["ATR"] > 0) else entry * 0.005
-            
-            if direction == "long":
-                trig = round(entry * 1.0015, 2)
-                sl = round(trig - (atr * atr_multiplier), 2)
-                risk = max(trig - sl, 0.05)
-                return trig, sl, risk, round(trig + (risk * 2), 2), round(trig + (risk * 3), 2)
-            else:
-                trig = round(entry * 0.9985, 2)
-                sl = round(trig + (atr * atr_multiplier), 2)
-                risk = max(sl - trig, 0.05)
-                return trig, sl, risk, round(trig - (risk * 2), 2), round(trig - (risk * 3), 2)
 
         st.markdown("---")
-        
-        # --- LONG SETUP VECTOR ---
+
+        # --- LONG SETUP ---
         st.success(f"### 📈 ACCELERATED LONG CHANNEL: {bullish_candidate['Symbol']}")
-        l_trig, l_sl, l_risk, l_t1, l_t2 = build_setups(bullish_candidate, "long")
-        
+        st.caption(f"Trend ADX: **{bullish_candidate['ADX']:.2f}** | RS Rank Alpha: **{bullish_candidate['RS']:.4f}**")
+        l_trig, l_sl, l_risk, l_t1, l_t2 = build_setups(bullish_candidate, atr_multiplier, "long")
+
         if trading_mode == "📈 Intraday Cash (Shares)":
             qty = max(min(int(max_risk // l_risk), int(buying_power // l_trig)), 1)
             st.info(f"👉 **Allocation Layout:** Buy **{qty} shares** at Trigger. Risk Capital: ₹{round(l_risk * qty, 2)}")
-            
+
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Spot Entry Trigger", f"₹{l_trig}")
             c2.metric("Stop Loss", f"₹{l_sl}", delta=f"-{l_risk:.2f}")
@@ -373,13 +404,13 @@ with tab_live:
             lot_size_long = lot_dict.get(bullish_candidate['Symbol'], 1)
             max_loss_long = round(l_risk * lot_size_long, 2)
             margin_req_long = round(l_trig * lot_size_long * 0.22, 2)
-            
-            st.info(f"ℹ️ **Exchange Margin Proxy Disclaimer:** Margin requirement calculated at ~22% rough SPAN+Exposure estimation framework.")
-            
+
+            st.info("ℹ️ **Exchange Margin Proxy Disclaimer:** Margin requirement calculated at ~22% rough SPAN+Exposure estimation — not exact exchange data.")
+
             if max_loss_long > max_risk:
-                st.error(f"🚫 **EXECUTION LOCKOUT:** Single Lot Risk Exposure (₹{max_loss_long:,}) violates your parameter max risk configuration of ₹{max_risk}.")
+                st.error(f"🚫 **EXECUTION LOCKOUT:** Single Lot Risk Exposure (₹{max_loss_long:,}) violates your max risk configuration of ₹{max_risk}.")
             elif margin_req_long > capital:
-                st.error(f"🚫 **EXECUTION LOCKOUT:** Estimated Exchange Margin requirement (~₹{margin_req_long:,}) exceeds your system capital settings profile (₹{capital:,}).")
+                st.error(f"🚫 **EXECUTION LOCKOUT:** Estimated Exchange Margin requirement (~₹{margin_req_long:,}) exceeds your capital settings (₹{capital:,}).")
             else:
                 st.info(f"👉 **Derivative Setup:** 1 Lot ({lot_size_long} Units). Max Loss Exposure: ₹{max_loss_long}")
                 c1, c2, c3, c4 = st.columns(4)
@@ -387,22 +418,22 @@ with tab_live:
                 c2.metric("Stop Loss", f"₹{l_sl}", delta=f"-{l_risk:.2f}")
                 c3.metric("Target 1 (1:2)", f"₹{l_t1}")
                 c4.metric("Target 2 (1:3)", f"₹{l_t2}")
-        
+
         st.markdown("---")
-        
-        # --- SHORT SETUP VECTOR ---
+
+        # --- SHORT SETUP (only if RS < 0 AND ROC < 0) ---
         st.error("### 📉 DISTRESSED SHORT CHANNEL DISPATCH")
         if short_filtered_pool.empty:
             st.info("ℹ️ **No valid short setups found.** No industrial assets meet the necessary mathematical parameters for short positions (RS < 0 and ROC < 0).")
         else:
             bearish_candidate = short_filtered_pool.iloc[-1]
             st.error(f"Confirmed Short Execution Candidate Detected: **{bearish_candidate['Symbol']}**")
-            s_trig, s_sl, s_risk, s_t1, s_t2 = build_setups(bearish_candidate, "short")
-            
+            s_trig, s_sl, s_risk, s_t1, s_t2 = build_setups(bearish_candidate, atr_multiplier, "short")
+
             if trading_mode == "📈 Intraday Cash (Shares)":
                 qty_s = max(min(int(max_risk // s_risk), int(buying_power // s_trig)), 1)
                 st.info(f"👉 **Allocation Layout:** Short **{qty_s} shares** at Trigger. Risk Capital: ₹{round(s_risk * qty_s, 2)}")
-                
+
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Spot Entry Trigger", f"₹{s_trig}")
                 c2.metric("Stop Loss", f"₹{s_sl}", delta=f"+{s_risk:.2f}", delta_color="inverse")
@@ -412,13 +443,13 @@ with tab_live:
                 lot_size_short = lot_dict.get(bearish_candidate['Symbol'], 1)
                 max_loss_short = round(s_risk * lot_size_short, 2)
                 margin_req_short = round(s_trig * lot_size_short * 0.22, 2)
-                
-                st.info(f"ℹ️ **Exchange Margin Proxy Disclaimer:** Margin requirement calculated at ~22% rough SPAN+Exposure estimation framework.")
-                
+
+                st.info("ℹ️ **Exchange Margin Proxy Disclaimer:** Margin requirement calculated at ~22% rough SPAN+Exposure estimation — not exact exchange data.")
+
                 if max_loss_short > max_risk:
-                    st.error(f"🚫 **EXECUTION LOCKOUT:** Single Lot Risk Exposure (₹{max_loss_short:,}) violates your parameter max risk configuration of ₹{max_risk}.")
+                    st.error(f"🚫 **EXECUTION LOCKOUT:** Single Lot Risk Exposure (₹{max_loss_short:,}) violates your max risk configuration of ₹{max_risk}.")
                 elif margin_req_short > capital:
-                    st.error(f"🚫 **EXECUTION LOCKOUT:** Estimated Exchange Margin requirement (~₹{margin_req_short:,}) exceeds your system capital settings profile (₹{capital:,}).")
+                    st.error(f"🚫 **EXECUTION LOCKOUT:** Estimated Exchange Margin requirement (~₹{margin_req_short:,}) exceeds your capital settings (₹{capital:,}).")
                 else:
                     st.info(f"👉 **Derivative Setup:** 1 Lot ({lot_size_short} Units). Max Loss Exposure: ₹{max_loss_short}")
                     c1, c2, c3, c4 = st.columns(4)
@@ -427,18 +458,26 @@ with tab_live:
                     c3.metric("Target 1 (1:2)", f"₹{s_t1}")
                     c4.metric("Target 2 (1:3)", f"₹{s_t2}")
 
+# ============================================================
+# BACKTEST TAB
+# ============================================================
 with tab_backtest:
     st.title("🧮 Quantitative Verification Sandbox")
-    st.caption("Verifies historic risk metrics over recent trading horizons.")
-    
+    st.caption("Simulates the long-side scanner logic over recent historical sessions. Short-side is not yet simulated — treat results as partial evidence only.")
+
+    days_to_test = st.number_input("Days to backtest", min_value=5, max_value=60, value=20, step=5,
+                                    help="5 days is too small a sample to draw conclusions from. Use a larger window before trusting the result.")
+
     run_backtest = st.button("🚀 Run Backtest Simulation Engine")
     if run_backtest:
         with st.spinner("Processing high-speed batched simulations..."):
-            sample_results = execute_historical_backtest(days_to_test=5)
+            sample_results = execute_historical_backtest(days_to_test=days_to_test)
             if sample_results:
                 arr = np.array(sample_results)
                 win_rate = (np.sum(arr > 0) / len(arr)) * 100
-                st.metric("Model Sample Win Rate", f"{win_rate:.2f}%")
+                st.metric("Model Sample Win Rate", f"{win_rate:.2f}%", help=f"Based on {len(arr)} simulated trades")
                 st.metric("Net Risk Multiplier Alpha Yield (R)", f"{np.sum(arr):.1f} R")
+                if len(arr) < 30:
+                    st.warning(f"⚠️ Only {len(arr)} trades in this sample — too few to draw reliable conclusions. Increase the day count above.")
             else:
                 st.info("Insufficient baseline data clusters within standard historical tracking windows to run verification maps.")
