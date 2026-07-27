@@ -281,7 +281,8 @@ def execute_historical_backtest(days_to_test=5):
 
 
 
-    def build_setups(row, atr_multiplier, direction="long"):
+  def build_setups(row, atr_multiplier, direction="long"):
+    """Calculates setups using current price and ATR filter."""
     entry = row["Close"]
     atr = row["ATR"] if (pd.notna(row["ATR"]) and row["ATR"] > 0) else entry * 0.005
 
