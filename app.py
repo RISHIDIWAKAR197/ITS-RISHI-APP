@@ -280,21 +280,21 @@ def execute_historical_backtest(days_to_test=5):
     return trades
 
 
-def build_setups(row, atr_multiplier, direction="long"):
-    entry = row["Close"]
-    atr = row["ATR"] if (pd.notna(row["ATR"]) and row["ATR"] > 0) else entry * 0.005
-
+def build_setups_v2(row, range_high, range_low, atr_val, direction="long"):
+    """
+    range_high: High of the 15-min Opening Range (9:15 - 9:30 AM)
+    range_low: Low of the 15-min Opening Range (9:15 - 9:30 AM)
+    """
     if direction == "long":
-        trig = round(entry * 1.0015, 2)
-        sl = round(trig - (atr * atr_multiplier), 2)
-        risk = max(trig - sl, 0.05)
-        return trig, sl, risk, round(trig + (risk * 2), 2), round(trig + (risk * 3), 2)
+        trig = round(range_high + 0.05, 2)  # Entry just above Opening High
+        sl = round(range_low, 2)            # SL below Opening Low
+        risk = max(trig - sl, 0.10)
+        return trig, sl, risk, round(trig + (risk * 1.5), 2), round(trig + (risk * 2.5), 2)
     else:
-        trig = round(entry * 0.9985, 2)
-        sl = round(trig + (atr * atr_multiplier), 2)
-        risk = max(sl - trig, 0.05)
-        return trig, sl, risk, round(trig - (risk * 2), 2), round(trig - (risk * 3), 2)
-
+        trig = round(range_low - 0.05, 2)   # Entry just below Opening Low
+        sl = round(range_high, 2)           # SL above Opening High
+        risk = max(sl - trig, 0.10)
+        return trig, sl, risk, round(trig - (risk * 1.5), 2), round(trig - (risk * 2.5), 2)
 
 # ============================================================
 # SIDEBAR CONTROLS
