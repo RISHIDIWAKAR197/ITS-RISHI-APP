@@ -1,482 +1,400 @@
-import time
-import logging
-from datetime import datetime, timedelta, timezone
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
 import yfinance as yf
-from nselib import capital_market
+from datetime import datetime, time, timedelta
+import plotly.graph_objects as go
+import plotly.express as px
 
-# --- SYSTEM LOGGING SETUP ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --- PAGE CONFIGURATION ---
+# ---------------------------------------------------------
+# Page Configuration & Styling
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title="The Ennoble Trader | Industrial Momentum Engine",
-    page_icon="🏭",
+    page_title="The Ennoble Trader",
+    page_icon="📈",
     layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- SYSTEM CONSTANTS ---
-NSE_RETRIES = 2
-NSE_RETRY_DELAY = 1.0
+# Custom Styling for modern dark/light contrast
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #1e2130;
+        border: 1px solid #2e344e;
+        padding: 18px;
+        border-radius: 10px;
+        color: #ffffff;
+        margin-bottom: 15px;
+    }
+    .stMetric {
+        background: #111422;
+        padding: 12px;
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-INDUSTRIAL_UNIVERSE = [
-    "RELIANCE", "TATASTEEL", "LT", "MARUTI", "M&M",
-    "BHARTARTL", "NTPC", "POWERGRID", "COALINDIA", "ULTRACEMCO",
-    "GRASIM", "JSL", "JINDALSTEL", "HINDALCO", "BEL", "BHEL"
+# ---------------------------------------------------------
+# Nifty Basket Universe
+# ---------------------------------------------------------
+NIFTY_50_TICKERS = [
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
+    "BHARTIARTL.NS", "ITC.NS", "SBIN.NS", "LT.NS", "HINDUNILVR.NS",
+    "BAJFINANCE.NS", "HCLTECH.NS", "MARUTI.NS", "SUNPHARMA.NS", "TATAMOTORS.NS",
+    "KOTAKBANK.NS", "AXISBANK.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS",
+    "TITAN.NS", "ADANIENT.NS", "BAJAJFINSV.NS", "TATASTEEL.NS", "M&M.NS",
+    "ASIANPAINT.NS", "COALINDIA.NS", "JSWSTEEL.NS", "ULTRACEMCO.NS", "TECHM.NS",
+    "WIPRO.NS", "GRASIM.NS", "HINDALCO.NS", "NESTLEIND.NS", "SHRIRAMFIN.NS",
+    "CIPLA.NS", "HEROMOTOCO.NS", "DRREDDY.NS", "TATACONSUM.NS", "EICHERMOT.NS",
+    "DIVISLAB.NS", "APOLLOHOSP.NS", "BAJAJ-AUTO.NS", "BPCL.NS", "BRITANNIA.NS",
+    "BEL.NS", "TRENT.NS", "ADANIPORTS.NS", "SBILIFE.NS", "HDFCLIFE.NS"
 ]
 
-# --- SESSION STATE INITIALIZATION ---
-if "market_data" not in st.session_state:
-    st.session_state.market_data = None
-if "last_scan_time" not in st.session_state:
-    st.session_state.last_scan_time = None
-if "error_logs" not in st.session_state:
-    st.session_state.error_logs = {}
+# ---------------------------------------------------------
+# Sidebar: Capital & Risk Management Settings
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("🕹️ Control Center")
+    st.subheader("⚙️ Capital & Risk Allocation")
+    
+    capital = st.number_input("Trading Capital (₹)", min_value=5000, value=100000, step=5000)
+    mis_leverage = st.slider("Intraday MIS Leverage (x)", min_value=1.0, max_value=5.0, value=5.0, step=0.5)
+    max_risk_per_trade = st.number_input("Max Risk Per Trade (₹)", min_value=100, value=1000, step=100)
+    
+    buying_power = capital * mis_leverage
+    st.markdown(f"**Total Buying Power:** `₹{buying_power:,.2f}`")
+    st.markdown("---")
+    
+    st.subheader("🎯 Strategy Rules")
+    sl_pct = st.slider("Stop Loss % per trade", min_value=0.2, max_value=3.0, value=0.75, step=0.05) / 100
+    rr_ratio = st.slider("Risk-to-Reward Ratio (1 : X)", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
+    target_pct = sl_pct * rr_ratio
+    
+    st.info(f"🛡️ **Risk:** {sl_pct*100:.2f}% | 🎯 **Target:** {target_pct*100:.2f}% (1:{rr_ratio:.1f})")
 
-# ============================================================
-# INDICATOR HELPERS (verified against pandas_ta reference output)
-# ============================================================
-def wilders_moving_average(series: pd.Series, period: int = 14) -> pd.Series:
-    """True Welles Wilder moving average, recomputed at every index step."""
-    vals = series.values.astype(float)
-    out = np.zeros_like(vals)
-    if len(vals) < period:
-        return pd.Series(out, index=series.index)
-
-    out[period - 1] = np.mean(vals[:period])
-    for i in range(period, len(vals)):
-        out[i] = (out[i - 1] * (period - 1) + vals[i]) / period
-
-    return pd.Series(out, index=series.index)
-
-
-def calculate_vwap_by_session(df: pd.DataFrame) -> pd.Series:
-    """Intraday VWAP that resets at the start of each trading day."""
-    typical_price = (df["High"] + df["Low"] + df["Close"]) / 3
-    cum_pv = typical_price * df["Volume"]
-    dates = df.index.date
-    temp_df = pd.DataFrame({'cum_pv': cum_pv, 'vol': df['Volume'], 'date': dates}, index=df.index)
-    grouped = temp_df.groupby('date')
-    return grouped['cum_pv'].cumsum() / grouped['vol'].cumsum()
-
-
-# --- LOW-LEVEL NSE NETWORK CALLER ---
-def nse_call(fn, *args, **kwargs):
-    last_err = None
-    for attempt in range(NSE_RETRIES):
-        try:
-            result = fn(*args, **kwargs)
-            if result is None or (isinstance(result, pd.DataFrame) and result.empty):
-                last_err = "Empty response received from exchange gateway."
-            else:
-                return result, None
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-        if attempt < NSE_RETRIES - 1:
-            time.sleep(NSE_RETRY_DELAY)
-    return None, last_err
-
-
-# ============================================================
-# LIVE F&O LOT-SIZE FETCH, WITH CLEARLY-LABELED FALLBACK
-# ============================================================
-@st.cache_data(ttl=86400, show_spinner=False)
-def get_fno_lot_sizes():
-    """
-    Fetches F&O lot sizes live via nselib. If the live feed fails, returns a
-    hardcoded fallback with an explicit staleness flag and last-verified date
-    so the UI can warn the user rather than trading silently on old data.
-    NSE revises lot sizes periodically (commonly every ~6 months per SEBI
-    guidelines) so this fallback WILL go stale — verify against your broker
-    terminal before trusting it for a live order.
-    """
-    FALLBACK_LOT_SIZES = {
-        "RELIANCE": 500, "BHEL": 2625, "TATASTEEL": 5500, "LT": 300,
-        "MARUTI": 100, "M&M": 400, "BHARTARTL": 475, "NTPC": 1500,
-        "POWERGRID": 3600, "COALINDIA": 1350, "ULTRACEMCO": 100,
-        "GRASIM": 400, "JSL": 1000, "JINDALSTEL": 1250, "HINDALCO": 700,
-        "BEL": 1425
-    }
-    fallback_date_str = "2026-07-20"
-
-    df, err = nse_call(capital_market.fno_equity_list)
-    if err or df is None or "SYMBOL" not in df.columns or "LOT SIZE" not in df.columns:
-        return FALLBACK_LOT_SIZES, True, fallback_date_str
-
+# ---------------------------------------------------------
+# Helper Functions: Data Fetching & Ranking
+# ---------------------------------------------------------
+@st.cache_data(ttl=300)
+def fetch_live_market_data():
+    """Fetch current daily performance for Nifty universe."""
     try:
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        lots = pd.to_numeric(df["LOT SIZE"], errors="coerce")
-        lot_map = dict(zip(df["SYMBOL"].str.strip().str.upper(), lots))
-        cleaned_map = {k: int(v) for k, v in lot_map.items() if pd.notna(v)}
-
-        if not cleaned_map:
-            return FALLBACK_LOT_SIZES, True, fallback_date_str
-
-        return cleaned_map, False, None
-    except Exception:
-        return FALLBACK_LOT_SIZES, True, fallback_date_str
-
-
-# ============================================================
-# QUANT MOMENTUM SCANNER ENGINE
-# ============================================================
-def fetch_momentum_metrics(symbol: str, benchmark_df: pd.DataFrame):
-    """Calculates VWAP/EMA/ROC/ADX/ATR/RS for one symbol using 5-min bars."""
-    ticker = f"{symbol.strip().upper()}.NS"
-    try:
-        df = yf.download(tickers=ticker, period="5d", interval="5m", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 30:
-            return None, "Ticker returned empty execution footprint or insufficient history."
-
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-
-        df["VWAP"] = calculate_vwap_by_session(df)
-        df["EMA_20"] = df["Close"].ewm(span=20, adjust=False).mean()
-        df["ROC"] = ((df["Close"] - df["Close"].shift(14)) / df["Close"].shift(14)) * 100
-
-        high_diff = df["High"].diff()
-        low_diff = df["Low"].diff(1).multiply(-1)
-
-        plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
-        minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
-
-        prev_close = df["Close"].shift(1)
-        tr = pd.concat([
-            df["High"] - df["Low"],
-            (df["High"] - prev_close).abs(),
-            (df["Low"] - prev_close).abs()
-        ], axis=1).max(axis=1)
-
-        smoothed_tr = wilders_moving_average(tr, 14)
-        smoothed_plus_dm = wilders_moving_average(pd.Series(plus_dm, index=df.index), 14)
-        smoothed_minus_dm = wilders_moving_average(pd.Series(minus_dm, index=df.index), 14)
-
-        df["+DI"] = 100 * (smoothed_plus_dm / np.where(smoothed_tr != 0, smoothed_tr, 1.0))
-        df["-DI"] = 100 * (smoothed_minus_dm / np.where(smoothed_tr != 0, smoothed_tr, 1.0))
-
-        di_sum = df["+DI"] + df["-DI"]
-        di_diff = (df["+DI"] - df["-DI"]).abs()
-
-        dx = np.where(di_sum != 0, 100 * (di_diff / di_sum), 0.0)
-        df["ADX"] = wilders_moving_average(pd.Series(dx, index=df.index), 14)
-        df["ATR"] = smoothed_tr
-
-        df = df.join(benchmark_df[['Close']], rsuffix='_BENCH', how='inner')
-        if not df.empty:
-            stock_perf = (df["Close"] / df["Close"].iloc[0]) - 1
-            bench_perf = (df["Close_BENCH"] / df["Close_BENCH"].iloc[0]) - 1
-            df["RS"] = stock_perf - bench_perf
-        else:
-            df["RS"] = 0.0
-
-        return df.iloc[-1].to_dict(), None
+        data = yf.download(NIFTY_50_TICKERS, period="5d", interval="1d", group_by='ticker', progress=False)
+        records = []
+        for sym in NIFTY_50_TICKERS:
+            try:
+                df = data[sym].dropna()
+                if len(df) >= 2:
+                    curr_close = float(df['Close'].iloc[-1])
+                    prev_close = float(df['Close'].iloc[-2])
+                    change_pct = ((curr_close - prev_close) / prev_close) * 100
+                    high = float(df['High'].iloc[-1])
+                    low = float(df['Low'].iloc[-1])
+                    volume = int(df['Volume'].iloc[-1])
+                    
+                    records.append({
+                        "Symbol": sym.replace(".NS", ""),
+                        "Ticker": sym,
+                        "Price (₹)": round(curr_close, 2),
+                        "Change (%)": round(change_pct, 2),
+                        "Day High (₹)": round(high, 2),
+                        "Day Low (₹)": round(low, 2),
+                        "Volume": volume
+                    })
+            except Exception:
+                continue
+        return pd.DataFrame(records)
     except Exception as e:
-        return None, f"Execution Failure: {str(e)}"
-
-
-def scan_industrial_universe():
-    bench = yf.download(tickers="^NSEI", period="5d", interval="5m", progress=False, auto_adjust=True)
-    bench.columns = [c[0] if isinstance(c, tuple) else c for c in bench.columns]
-
-    results = []
-    errors = {}
-
-    for sym in INDUSTRIAL_UNIVERSE:
-        metrics, err_msg = fetch_momentum_metrics(sym, bench)
-        if err_msg:
-            errors[sym] = err_msg
-        elif metrics:
-            metrics["Symbol"] = sym
-            results.append(metrics)
-
-    st.session_state.error_logs = errors
-    if not results:
+        st.error(f"Error fetching market data: {e}")
         return pd.DataFrame()
 
-    res_df = pd.DataFrame(results)
-    res_df["Score"] = res_df["RS"] * 0.6 + (res_df["ADX"] / 100) * 0.4
-    return res_df.sort_values(by="Score", ascending=False)
+# ---------------------------------------------------------
+# Main UI & Navigation Tabs
+# ---------------------------------------------------------
+st.title("📊 The Ennoble Trader")
+st.caption("Simplified Intraday Momentum Screener & Quantitative Backtesting Platform")
 
+tab_live, tab_backtest = st.tabs(["⚡ Live Strategy & Scanners", "🧪 Enhanced Backtester"])
 
-# ============================================================
-# BATCHED HISTORICAL BACKTEST ENGINE (long-side only)
-# ============================================================
-@st.cache_data(ttl=3600, show_spinner=False)
-def execute_historical_backtest(days_to_test=5):
-    tickers = [f"{s}.NS" for s in INDUSTRIAL_UNIVERSE]
-    all_tickers = tickers + ["^NSEI"]
-
-    data_cluster = yf.download(tickers=all_tickers, period=f"{days_to_test + 4}d", interval="5m", progress=False)
-    if data_cluster.empty:
-        return []
-
-    bench = data_cluster["Close"]["^NSEI"].dropna()
-    unique_days = sorted(list(set(bench.index.date)))[-days_to_test:]
-    trades = []
-
-    for day in unique_days:
-        day_start = datetime.combine(day, datetime.min.time(), tzinfo=bench.index.tz)
-        day_end = datetime.combine(day, datetime.max.time(), tzinfo=bench.index.tz)
-
-        ranking_list = []
-        for sym in INDUSTRIAL_UNIVERSE:
-            tk = f"{sym}.NS"
-            if tk not in data_cluster["Close"].columns:
-                continue
-
-            s_data = pd.DataFrame({
-                "Open": data_cluster["Open"][tk],
-                "High": data_cluster["High"][tk],
-                "Low": data_cluster["Low"][tk],
-                "Close": data_cluster["Close"][tk]
-            }).dropna()
-
-            historical_slice = s_data[s_data.index < day_start]
-            target_session = s_data[(s_data.index >= day_start) & (s_data.index <= day_end)]
-
-            if historical_slice.empty or target_session.empty:
-                continue
-
-            ref_close = historical_slice["Close"].iloc[-1]
-            bench_history = bench[bench.index < day_start]
-            if bench_history.empty:
-                continue
-            prev_close_bench = bench_history.iloc[-1]
-
-            rs_proxy = (ref_close / historical_slice["Close"].iloc[0]) - (prev_close_bench / bench.iloc[0])
-            ranking_list.append({
-                "Symbol": sym,
-                "RS": rs_proxy,
-                "Session_Data": target_session,
-                "ATR_Ref": (historical_slice["High"] - historical_slice["Low"]).mean()
-            })
-
-        if not ranking_list:
-            continue
-
-        rank_df = pd.DataFrame(ranking_list).sort_values(by="RS", ascending=False)
-
-        long_pick = rank_df.iloc[0]
-        l_trigger = long_pick["Session_Data"]["Open"].iloc[0] * 1.0015
-        l_sl = l_trigger - (long_pick["ATR_Ref"] * 2.0)
-        l_t1 = l_trigger + ((l_trigger - l_sl) * 2.0)
-
-        long_hit = long_pick["Session_Data"][long_pick["Session_Data"]["High"] >= l_trigger]
-        if not long_hit.empty:
-            exec_timeline = long_pick["Session_Data"][long_pick["Session_Data"].index >= long_hit.index[0]]
-            hit_sl = exec_timeline[exec_timeline["Low"] <= l_sl]
-            hit_t1 = exec_timeline[exec_timeline["High"] >= l_t1]
-
-            if not hit_sl.empty and (hit_t1.empty or hit_sl.index[0] < hit_t1.index[0]):
-                trades.append(-1.0)
-            elif not hit_t1.empty:
-                trades.append(2.0)
-            else:
-                trades.append(0.0)
-
-    return trades
-
-
-def build_setups(row, atr_multiplier, direction="long"):
-    """Calculates setups using current price and ATR filter."""
-    entry = row["Close"]
-    atr = row["ATR"] if (pd.notna(row["ATR"]) and row["ATR"] > 0) else entry * 0.005
-
-    if direction == "long":
-        trig = round(entry * 1.0015, 2)
-        sl = round(trig - (atr * atr_multiplier), 2)
-        risk = max(trig - sl, 0.05)
-        return trig, sl, risk, round(trig + (risk * 2), 2), round(trig + (risk * 3), 2)
-    else:
-        trig = round(entry * 0.9985, 2)
-        sl = round(trig + (atr * atr_multiplier), 2)
-        risk = max(sl - trig, 0.05)
-        return trig, sl, risk, round(trig - (risk * 2), 2), round(trig - (risk * 3), 2)
-# ============================================================
-# SIDEBAR CONTROLS
-# ============================================================
-st.sidebar.header("🕹️ Control Center")
-trading_mode = st.sidebar.radio("Choose Your Trading Mode:", ["📈 Intraday Cash (Shares)", "🔥 Stock Futures (Lots)"])
-st.sidebar.markdown("---")
-
-st.sidebar.subheader("⚙️ Capital Management Framework")
-if trading_mode == "📈 Intraday Cash (Shares)":
-    capital = st.sidebar.number_input("Trading Capital (₹)", value=50000, step=5000)
-    leverage = st.sidebar.number_input("MIS Leverage (x)", value=5, min_value=1, max_value=5)
-    max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=500, step=50)
-    buying_power = capital * leverage
-    st.sidebar.info(f"Total Buying Power: **₹{buying_power:,}**")
-else:
-    capital = st.sidebar.number_input("Trading Margin (₹)", value=200000, step=10000)
-    max_risk = st.sidebar.number_input("Max Risk Per Trade (₹)", value=5000, step=250)
-
-st.sidebar.subheader("📐 Strategy Exit Bounds")
-atr_multiplier = st.sidebar.number_input("ATR Multiplier", value=2.0, min_value=1.0, max_value=4.0, step=0.1)
-
-tab_live, tab_backtest = st.tabs(["📡 Real-Time Momentum Scanner", "🧮 Strategy Backtester Modules"])
-
-# ============================================================
-# LIVE SCANNER TAB
-# ============================================================
+# =========================================================
+# TAB 1: Live Top Gainer & Loser Strategy
+# =========================================================
 with tab_live:
-    st.title("🏭 High-Velocity Industrial Engine")
+    with st.spinner("Scanning Nifty Basket for Top Gainers and Losers..."):
+        market_df = fetch_live_market_data()
 
-    # Only fetch/gate on lot sizes when the user is actually in Futures mode.
-    # Cash-mode traders never use lot sizes, so they should never be blocked
-    # by a stale F&O lot-size feed.
-    lot_dict, using_fallback, fallback_date = {}, False, None
-    if trading_mode == "🔥 Stock Futures (Lots)":
-        lot_dict, using_fallback, fallback_date = get_fno_lot_sizes()
+    if market_df.empty:
+        st.warning("Unable to fetch live market feeds. Please check your network or try again in a few seconds.")
+    else:
+        # Sort for Gainers & Losers
+        sorted_df = market_df.sort_values(by="Change (%)", ascending=False).reset_index(drop=True)
+        top_gainers = sorted_df.head(5)
+        top_losers = sorted_df.tail(5).sort_values(by="Change (%)", ascending=True)
 
-        if using_fallback:
-            st.error(
-                "### 🛑 EXCHANGE CONNECTION INTERRUPTED\n"
-                "The system was unable to pull live lot-size parameters via `nselib`. "
-                "To protect execution sizing from stale, unverified values, futures "
-                "operations have been locked."
+        st.subheader("🔥 Top 5 Gainers & Top 5 Losers Today")
+        col_g, col_l = st.columns(2)
+        
+        with col_g:
+            st.markdown("### 📈 Top Gainers (Bullish Momentum)")
+            st.dataframe(
+                top_gainers[["Symbol", "Price (₹)", "Change (%)", "Day High (₹)", "Volume"]],
+                use_container_width=True,
+                hide_index=True
             )
-            st.warning(
-                f"⚠️ Emergency fallback data is available (last verified: **{fallback_date}**). "
-                "NSE alters contract lot sizes periodically (typically every ~6 months), so "
-                "using these numbers without validation risks incorrect position sizing."
+            
+        with col_l:
+            st.markdown("### 📉 Top Losers (Bearish Momentum)")
+            st.dataframe(
+                top_losers[["Symbol", "Price (₹)", "Change (%)", "Day Low (₹)", "Volume"]],
+                use_container_width=True,
+                hide_index=True
             )
-
-            override_lockout = st.checkbox(
-                "I have manually verified my broker terminal lot sizes and wish to override."
-            )
-            if not override_lockout:
-                st.info("💡 **Awaiting validation:** Futures execution halted until override is checked.")
-                st.stop()
-            else:
-                st.warning("⚠️ Running on manual override using static fallback values. Double-check margin bounds.")
-
-    col_run, col_time = st.columns([1, 3])
-    with col_run:
-        trigger_scan = st.button("🔄 Run Scanner / Sync Terminals", use_container_width=True)
-
-    if trigger_scan or st.session_state.market_data is None:
-        with st.spinner("Compiling structural market matrix features..."):
-            scanned_df = scan_industrial_universe()
-            if not scanned_df.empty:
-                st.session_state.market_data = scanned_df
-                st.session_state.last_scan_time = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-
-    if st.session_state.last_scan_time:
-        st.write(f"⏱️ *Last sync completed at: {st.session_state.last_scan_time.strftime('%H:%M:%S IST')}*")
-
-    if st.session_state.error_logs:
-        with st.expander("⚠️ Data Pipeline Status Reports (Network Latency Logs)"):
-            for sym, log_err in st.session_state.error_logs.items():
-                st.error(f"**{sym}**: {log_err}")
-
-    if st.session_state.market_data is not None:
-        df_display = st.session_state.market_data.copy()
-
-        st.subheader("📊 Quant Screen Matrix Dashboard")
-        st.dataframe(df_display[["Symbol", "Close", "RS", "ADX", "ROC", "VWAP", "EMA_20"]].style.format({
-            "RS": "{:,.4f}", "ADX": "{:,.2f}", "ROC": "{:,.2f}%", "Close": "{:,.2f}", "VWAP": "{:,.2f}", "EMA_20": "{:,.2f}"
-        }), use_container_width=True)
-
-        bullish_candidate = df_display.iloc[0]
-        short_filtered_pool = df_display[(df_display["RS"] < 0) & (df_display["ROC"] < 0)]
 
         st.markdown("---")
+        st.subheader("🎯 Auto-Calculated Intraday Action Setups")
 
-        # --- LONG SETUP ---
-        st.success(f"### 📈 ACCELERATED LONG CHANNEL: {bullish_candidate['Symbol']}")
-        st.caption(f"Trend ADX: **{bullish_candidate['ADX']:.2f}** | RS Rank Alpha: **{bullish_candidate['RS']:.4f}**")
-        l_trig, l_sl, l_risk, l_t1, l_t2 = build_setups(bullish_candidate, atr_multiplier, "long")
+        top_gainer = top_gainers.iloc[0]
+        top_loser = top_losers.iloc[0]
 
-        if trading_mode == "📈 Intraday Cash (Shares)":
-            qty = max(min(int(max_risk // l_risk), int(buying_power // l_trig)), 1)
-            st.info(f"👉 **Allocation Layout:** Buy **{qty} shares** at Trigger. Risk Capital: ₹{round(l_risk * qty, 2)}")
+        setup_col1, setup_col2 = st.columns(2)
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Spot Entry Trigger", f"₹{l_trig}")
-            c2.metric("Stop Loss", f"₹{l_sl}", delta=f"-{l_risk:.2f}")
-            c3.metric("Target 1 (1:2)", f"₹{l_t1}")
-            c4.metric("Target 2 (1:3)", f"₹{l_t2}")
-        else:
-            lot_size_long = lot_dict.get(bullish_candidate['Symbol'], 1)
-            max_loss_long = round(l_risk * lot_size_long, 2)
-            margin_req_long = round(l_trig * lot_size_long * 0.22, 2)
+        # Setup 1: Top Gainer Long Breakout
+        with setup_col1:
+            g_price = top_gainer["Price (₹)"]
+            g_entry = round(g_price * 1.0015, 2)  # Entry slightly above current
+            g_sl = round(g_entry * (1 - sl_pct), 2)
+            g_risk_per_share = g_entry - g_sl
+            g_qty = int(min(max_risk_per_trade / g_risk_per_share, buying_power / g_entry))
+            g_tgt1 = round(g_entry * (1 + target_pct), 2)
+            g_tgt2 = round(g_entry * (1 + target_pct * 1.5), 2)
 
-            st.info("ℹ️ **Exchange Margin Proxy Disclaimer:** Margin requirement calculated at ~22% rough SPAN+Exposure estimation — not exact exchange data.")
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 5px solid #00c853;">
+                <h3>🟢 LONG SETUP: {top_gainer['Symbol']}</h3>
+                <p><b>Condition:</b> Strongest Top Gainer (+{top_gainer['Change (%)']}%)</p>
+                <hr style="border-color:#2e344e;">
+                <p><b>🎯 Calculated Quantity:</b> {g_qty} shares</p>
+                <p><b>🛡️ Max Risk Value:</b> ₹{round(g_qty * g_risk_per_share, 2)}</p>
+                <p><b>🚀 Entry Trigger:</b> ₹{g_entry}</p>
+                <p><b>🛑 Stop Loss:</b> ₹{g_sl} (-{sl_pct*100:.2f}%)</p>
+                <p><b>🎯 Target 1 (1:{rr_ratio:.1f}):</b> ₹{g_tgt1} (+{target_pct*100:.2f}%)</p>
+                <p><b>🎯 Target 2 (1:{rr_ratio*1.5:.1f}):</b> ₹{g_tgt2}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-            if max_loss_long > max_risk:
-                st.error(f"🚫 **EXECUTION LOCKOUT:** Single Lot Risk Exposure (₹{max_loss_long:,}) violates your max risk configuration of ₹{max_risk}.")
-            elif margin_req_long > capital:
-                st.error(f"🚫 **EXECUTION LOCKOUT:** Estimated Exchange Margin requirement (~₹{margin_req_long:,}) exceeds your capital settings (₹{capital:,}).")
-            else:
-                st.info(f"👉 **Derivative Setup:** 1 Lot ({lot_size_long} Units). Max Loss Exposure: ₹{max_loss_long}")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Spot Entry Trigger", f"₹{l_trig}")
-                c2.metric("Stop Loss", f"₹{l_sl}", delta=f"-{l_risk:.2f}")
-                c3.metric("Target 1 (1:2)", f"₹{l_t1}")
-                c4.metric("Target 2 (1:3)", f"₹{l_t2}")
+        # Setup 2: Top Loser Short Breakdown
+        with setup_col2:
+            l_price = top_loser["Price (₹)"]
+            l_entry = round(l_price * 0.9985, 2)  # Entry slightly below current
+            l_sl = round(l_entry * (1 + sl_pct), 2)
+            l_risk_per_share = l_sl - l_entry
+            l_qty = int(min(max_risk_per_trade / l_risk_per_share, buying_power / l_entry))
+            l_tgt1 = round(l_entry * (1 - target_pct), 2)
+            l_tgt2 = round(l_entry * (1 - target_pct * 1.5), 2)
 
-        st.markdown("---")
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 5px solid #ff3d00;">
+                <h3>🔴 SHORT SETUP: {top_loser['Symbol']}</h3>
+                <p><b>Condition:</b> Weakest Top Loser ({top_loser['Change (%)']}%)</p>
+                <hr style="border-color:#2e344e;">
+                <p><b>🎯 Calculated Quantity:</b> {l_qty} shares</p>
+                <p><b>🛡️ Max Risk Value:</b> ₹{round(l_qty * l_risk_per_share, 2)}</p>
+                <p><b>🚀 Entry Trigger:</b> ₹{l_entry}</p>
+                <p><b>🛑 Stop Loss:</b> ₹{l_sl} (+{sl_pct*100:.2f}%)</p>
+                <p><b>🎯 Target 1 (1:{rr_ratio:.1f}):</b> ₹{l_tgt1} (-{target_pct*100:.2f}%)</p>
+                <p><b>🎯 Target 2 (1:{rr_ratio*1.5:.1f}):</b> ₹{l_tgt2}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-        # --- SHORT SETUP (only if RS < 0 AND ROC < 0) ---
-        st.error("### 📉 DISTRESSED SHORT CHANNEL DISPATCH")
-        if short_filtered_pool.empty:
-            st.info("ℹ️ **No valid short setups found.** No industrial assets meet the necessary mathematical parameters for short positions (RS < 0 and ROC < 0).")
-        else:
-            bearish_candidate = short_filtered_pool.iloc[-1]
-            st.error(f"Confirmed Short Execution Candidate Detected: **{bearish_candidate['Symbol']}**")
-            s_trig, s_sl, s_risk, s_t1, s_t2 = build_setups(bearish_candidate, atr_multiplier, "short")
-
-            if trading_mode == "📈 Intraday Cash (Shares)":
-                qty_s = max(min(int(max_risk // s_risk), int(buying_power // s_trig)), 1)
-                st.info(f"👉 **Allocation Layout:** Short **{qty_s} shares** at Trigger. Risk Capital: ₹{round(s_risk * qty_s, 2)}")
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Spot Entry Trigger", f"₹{s_trig}")
-                c2.metric("Stop Loss", f"₹{s_sl}", delta=f"+{s_risk:.2f}", delta_color="inverse")
-                c3.metric("Target 1 (1:2)", f"₹{s_t1}")
-                c4.metric("Target 2 (1:3)", f"₹{s_t2}")
-            else:
-                lot_size_short = lot_dict.get(bearish_candidate['Symbol'], 1)
-                max_loss_short = round(s_risk * lot_size_short, 2)
-                margin_req_short = round(s_trig * lot_size_short * 0.22, 2)
-
-                st.info("ℹ️ **Exchange Margin Proxy Disclaimer:** Margin requirement calculated at ~22% rough SPAN+Exposure estimation — not exact exchange data.")
-
-                if max_loss_short > max_risk:
-                    st.error(f"🚫 **EXECUTION LOCKOUT:** Single Lot Risk Exposure (₹{max_loss_short:,}) violates your max risk configuration of ₹{max_risk}.")
-                elif margin_req_short > capital:
-                    st.error(f"🚫 **EXECUTION LOCKOUT:** Estimated Exchange Margin requirement (~₹{margin_req_short:,}) exceeds your capital settings (₹{capital:,}).")
-                else:
-                    st.info(f"👉 **Derivative Setup:** 1 Lot ({lot_size_short} Units). Max Loss Exposure: ₹{max_loss_short}")
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Spot Entry Trigger", f"₹{s_trig}")
-                    c2.metric("Stop Loss", f"₹{s_sl}", delta=f"+{s_risk:.2f}", delta_color="inverse")
-                    c3.metric("Target 1 (1:2)", f"₹{s_t1}")
-                    c4.metric("Target 2 (1:3)", f"₹{s_t2}")
-
-# ============================================================
-# BACKTEST TAB
-# ============================================================
+# =========================================================
+# TAB 2: Enhanced Backtesting Engine
+# =========================================================
 with tab_backtest:
-    st.title("🧮 Quantitative Verification Sandbox")
-    st.caption("Simulates the long-side scanner logic over recent historical sessions. Short-side is not yet simulated — treat results as partial evidence only.")
+    st.subheader("🧪 Top Gainer/Loser Timing & Risk-Reward Backtester")
+    
+    # Backtest Configuration Row
+    b_col1, b_col2, b_col3, b_col4 = st.columns(4)
+    with b_col1:
+        lookback_days = st.slider("Backtest Window (Days)", min_value=15, max_value=60, value=30)
+    with b_col2:
+        entry_time_val = st.time_input("Entry Time (IST)", time(9, 30))
+    with b_col3:
+        exit_time_val = st.time_input("Square-Off Time (IST)", time(15, 15))
+    with b_col4:
+        max_daily_trades = st.slider("Max Trades per Day", min_value=1, max_value=4, value=2)
 
-    days_to_test = st.number_input("Days to backtest", min_value=5, max_value=60, value=20, step=5,
-                                    help="5 days is too small a sample to draw conclusions from. Use a larger window before trusting the result.")
+    run_btn = st.button("🚀 Run Enhanced Backtest", type="primary")
 
-    run_backtest = st.button("🚀 Run Backtest Simulation Engine")
-    if run_backtest:
-        with st.spinner("Processing high-speed batched simulations..."):
-            sample_results = execute_historical_backtest(days_to_test=days_to_test)
-            if sample_results:
-                arr = np.array(sample_results)
-                win_rate = (np.sum(arr > 0) / len(arr)) * 100
-                st.metric("Model Sample Win Rate", f"{win_rate:.2f}%", help=f"Based on {len(arr)} simulated trades")
-                st.metric("Net Risk Multiplier Alpha Yield (R)", f"{np.sum(arr):.1f} R")
-                if len(arr) < 30:
-                    st.warning(f"⚠️ Only {len(arr)} trades in this sample — too few to draw reliable conclusions. Increase the day count above.")
+    if run_btn:
+        with st.spinner("Downloading historical 5-minute candle feeds and computing executions..."):
+            # Fetch intraday data for representative liquid universe
+            sample_universe = NIFTY_50_TICKERS[:15]  # Balanced representative sample for fast execution
+            start_date = (datetime.now() - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+            
+            try:
+                hist_data = yf.download(
+                    tickers=sample_universe,
+                    start=start_date,
+                    interval="5m",
+                    group_by="ticker",
+                    progress=False
+                )
+            except Exception as e:
+                st.error(f"Failed to fetch historical 5m data: {e}")
+                hist_data = None
+
+            if hist_data is not None and not hist_data.empty:
+                trade_records = []
+                
+                # Extract unique dates
+                all_timestamps = hist_data.index
+                unique_dates = sorted(list(set([ts.date() for ts in all_timestamps])))
+                
+                for d in unique_dates:
+                    daily_perf = []
+                    for sym in sample_universe:
+                        try:
+                            df_sym = hist_data[sym].dropna()
+                            df_day = df_sym[df_sym.index.date == d]
+                            if len(df_day) > 5:
+                                open_p = df_day['Open'].iloc[0]
+                                entry_df = df_day[df_day.index.time >= entry_time_val]
+                                if not entry_df.empty:
+                                    entry_bar_price = entry_df['Open'].iloc[0]
+                                    change = ((entry_bar_price - open_p) / open_p) * 100
+                                    daily_perf.append((sym, change, entry_df))
+                        except Exception:
+                            continue
+                    
+                    if not daily_perf:
+                        continue
+                    
+                    # Sort candidates
+                    daily_perf.sort(key=lambda x: x[1], reverse=True)
+                    
+                    trades_today = 0
+                    # Trade 1: Long Top Gainer
+                    if len(daily_perf) > 0 and trades_today < max_daily_trades:
+                        sym, chg, df_candles = daily_perf[0]
+                        entry_price = df_candles['Open'].iloc[0]
+                        target_price = entry_price * (1 + target_pct)
+                        stop_loss_price = entry_price * (1 - sl_pct)
+                        risk_per_share = entry_price - stop_loss_price
+                        qty = int(min(max_risk_per_trade / risk_per_share, buying_power / entry_price))
+                        
+                        outcome = "SQUARE_OFF"
+                        exit_price = df_candles['Close'].iloc[-1]
+                        
+                        for idx, row in df_candles.iterrows():
+                            if row.name.time() > exit_time_val:
+                                exit_price = row['Close']
+                                break
+                            if row['High'] >= target_price:
+                                exit_price = target_price
+                                outcome = "TARGET"
+                                break
+                            if row['Low'] <= stop_loss_price:
+                                exit_price = stop_loss_price
+                                outcome = "STOP_LOSS"
+                                break
+                        
+                        pnl = (exit_price - entry_price) * qty
+                        trade_records.append({
+                            "Date": d,
+                            "Symbol": sym.replace(".NS", ""),
+                            "Type": "LONG",
+                            "Entry (₹)": round(entry_price, 2),
+                            "Exit (₹)": round(exit_price, 2),
+                            "Qty": qty,
+                            "PnL (₹)": round(pnl, 2),
+                            "Return (%)": round(((exit_price - entry_price) / entry_price) * 100, 2),
+                            "Outcome": outcome
+                        })
+                        trades_today += 1
+
+                    # Trade 2: Short Top Loser
+                    if len(daily_perf) > 1 and trades_today < max_daily_trades:
+                        sym, chg, df_candles = daily_perf[-1]
+                        entry_price = df_candles['Open'].iloc[0]
+                        target_price = entry_price * (1 - target_pct)
+                        stop_loss_price = entry_price * (1 + sl_pct)
+                        risk_per_share = stop_loss_price - entry_price
+                        qty = int(min(max_risk_per_trade / risk_per_share, buying_power / entry_price))
+                        
+                        outcome = "SQUARE_OFF"
+                        exit_price = df_candles['Close'].iloc[-1]
+                        
+                        for idx, row in df_candles.iterrows():
+                            if row.name.time() > exit_time_val:
+                                exit_price = row['Close']
+                                break
+                            if row['Low'] <= target_price:
+                                exit_price = target_price
+                                outcome = "TARGET"
+                                break
+                            if row['High'] >= stop_loss_price:
+                                exit_price = stop_loss_price
+                                outcome = "STOP_LOSS"
+                                break
+                        
+                        pnl = (entry_price - exit_price) * qty
+                        trade_records.append({
+                            "Date": d,
+                            "Symbol": sym.replace(".NS", ""),
+                            "Type": "SHORT",
+                            "Entry (₹)": round(entry_price, 2),
+                            "Exit (₹)": round(exit_price, 2),
+                            "Qty": qty,
+                            "PnL (₹)": round(pnl, 2),
+                            "Return (%)": round(((entry_price - exit_price) / entry_price) * 100, 2),
+                            "Outcome": outcome
+                        })
+                        trades_today += 1
+
+                # -------------------------------------------------
+                # Display Backtesting Metrics & Charts
+                # -------------------------------------------------
+                if trade_records:
+                    bt_df = pd.DataFrame(trade_records)
+                    bt_df['Cumulative PnL'] = bt_df['PnL (₹)'].cumsum()
+                    
+                    total_trades = len(bt_df)
+                    winning_trades = len(bt_df[bt_df['PnL (₹)'] > 0])
+                    win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
+                    total_profit = bt_df['PnL (₹)'].sum()
+                    max_dd = (bt_df['Cumulative PnL'].cummax() - bt_df['Cumulative PnL']).max()
+                    
+                    st.markdown("### 📈 Performance Summary")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Trades Executed", total_trades)
+                    m2.metric("Win Rate", f"{win_rate:.1f}%")
+                    m3.metric("Net Strategy P&L", f"₹{total_profit:,.2f}", delta=f"{total_profit:,.2f}")
+                    m4.metric("Max Strategy Drawdown", f"₹{max_dd:,.2f}")
+
+                    # Equity Curve Chart
+                    st.markdown("#### 📉 Cumulative Equity Growth")
+                    fig = px.line(
+                        bt_df,
+                        x="Date",
+                        y="Cumulative PnL",
+                        title="Cumulative Net P&L Curve (₹)",
+                        markers=True,
+                        template="plotly_dark"
+                    )
+                    fig.update_layout(xaxis_title="Date", yaxis_title="Net PnL (₹)")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Detailed Log Table
+                    st.markdown("#### 📜 Executed Trades Log")
+                    st.dataframe(bt_df, use_container_width=True)
+                else:
+                    st.info("No trades matched the criteria during this backtesting window.")
             else:
-                st.info("Insufficient baseline data clusters within standard historical tracking windows to run verification maps.")
+                st.warning("Historical data was empty or unavailable for the selected period.")
+
+# ---------------------------------------------------------
+# Footer Guardrail
+# ---------------------------------------------------------
+st.markdown("---")
+st.caption("⚠️ **Execution Guardrail:** *Intraday momentum strategies require strict discipline. Always place Stop-Loss Limit orders directly in your broker terminal to protect your trading capital.*")
