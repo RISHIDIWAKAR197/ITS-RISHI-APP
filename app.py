@@ -21,7 +21,7 @@ watchlist_input = st.sidebar.text_area(
     "Watchlist (Comma Separated)", 
     "RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK"
 )
-watchlist = [s.strip() for s.strip(watchlist_input).split(",")]
+watchlist = [s.strip() for s in watchlist_input.split(",")]
 
 refresh_rate = st.sidebar.slider("Auto-Refresh Interval (Seconds)", 2, 30, 5)
 
