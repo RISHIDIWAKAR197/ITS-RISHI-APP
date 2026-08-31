@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time as time_lib
 from datetime import datetime
 from strategy import analyze_ticker_signal
 
@@ -21,13 +20,13 @@ watchlist_input = st.sidebar.text_area(
     "Watchlist (Comma Separated)", 
     "RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK"
 )
-watchlist = [s.strip() for s in watchlist_input.split(",")]
+watchlist = [s.strip() for s in watchlist_input.split(",") if s.strip()]
 
 refresh_rate = st.sidebar.slider("Auto-Refresh Interval (Seconds)", 2, 30, 5)
 
-# Mock Data Streamer (Replace with your Broker WebSocket/REST API)
+# Mock Data Streamer
 def fetch_live_data(ticker):
-    times = pd.date_range(start=f"{datetime.today().strftime('%Y-%m-%d')} 09:15:00", periods=4, freq="5min")
+    times = pd.date_range(start=f"{datetime.today().strftime('%Y-%m-%d')} 09:15:00", periods=10, freq="5min")
     np.random.seed(abs(hash(ticker)) % 1000)
     base_price = 1000 + np.random.randint(-100, 100)
     
@@ -46,8 +45,8 @@ def fetch_live_data(ticker):
         'Volume': volume
     })
 
-# Streamlit Fragment ensures only this section refreshes without reloading the full UI
-@st.fragment
+# Streamlit Native Auto-Refresh Fragment
+@st.fragment(run_every=refresh_rate)
 def render_live_signals():
     signals = []
     
@@ -74,7 +73,3 @@ def render_live_signals():
 
 # Run the Fragment
 render_live_signals()
-
-# Trigger Automatic Rerun Loop
-time_lib.sleep(refresh_rate)
-st.rerun()
