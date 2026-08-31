@@ -66,7 +66,7 @@ def render_live_signals():
             return "background-color: #4a1e1e; color: #F44336; font-weight: bold;"
         return "color: #888888;"
 
-    styled_df = results_df.style.applymap(highlight_signals, subset=['Signal'])
+    styled_df = results_df.style.map(highlight_signals, subset=['Signal'])
     
     # Display Table
     st.subheader(f"Live Market Screener — Updated: {datetime.now().strftime('%H:%M:%S')}")
