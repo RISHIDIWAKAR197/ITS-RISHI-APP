@@ -193,8 +193,12 @@ Be concise, practical, and objective.
     return "⚠️ The Gemini API is currently under heavy load across available endpoints. Please wait 15–30 seconds and click the button again."
 
 # -------------------------------------------------------------------
-# 7. UI RENDERING & AUTO-REFRESH
+# 7. UI RENDERING & PERSISTENT AI STATE
 # -------------------------------------------------------------------
+# Initialize session state for persistent Gemini analysis
+if "ai_verdict" not in st.session_state:
+    st.session_state.ai_verdict = None
+
 @st.fragment(run_every=refresh_rate)
 def render_live_signals():
     signals = []
@@ -221,12 +225,17 @@ def render_live_signals():
     
     st.markdown("---")
     st.subheader("🤖 AI Trade Auditor (Gemini)")
+
     if active_candidates:
         if st.button("Generate AI Risk & Probability Audit"):
             with st.spinner("Gemini is auditing active setups..."):
-                verdict = get_gemini_verdict(active_candidates)
-                st.markdown(verdict)
+                # Save the verdict to session_state so the auto-refresher won't wipe it
+                st.session_state.ai_verdict = get_gemini_verdict(active_candidates)
     else:
         st.info("No active BUY or SELL setups currently detected. AI audit will be available when a breakout triggers.")
+
+    # Render persisted verdict if present
+    if st.session_state.ai_verdict:
+        st.markdown(st.session_state.ai_verdict)
 
 render_live_signals()
