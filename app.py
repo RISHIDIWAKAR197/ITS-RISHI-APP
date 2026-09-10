@@ -7,6 +7,7 @@ import time
 from PIL import Image
 from google import genai
 from google.genai.errors import APIError
+from zoneinfo import ZoneInfo
 
 # -------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & STYLING
@@ -271,7 +272,8 @@ def render_live_signals():
 
     styled_df = results_df.style.map(highlight_signals, subset=['Signal'])
     
-    st.subheader(f"Live Screener — {datetime.now().strftime('%H:%M:%S')}")
+    ist_now = datetime.now(ZoneInfo("Asia/Kolkata")).strftime('%I:%M:%S %p IST')
+st.subheader(f"Live Screener — {ist_now}")
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
     
     active_candidates = [s for s in signals if s['Signal'] not in ("NO TRADE / CHOP", "NO DATA")]
