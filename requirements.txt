@@ -7,3 +7,4 @@ requests
 nselib
 plotly
 google-genai
+pillow
