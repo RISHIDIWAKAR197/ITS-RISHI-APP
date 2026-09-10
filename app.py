@@ -160,14 +160,14 @@ For each active trade setup:
 3. State whether the setup has a high or low probability of false breakouts in typical Indian equity market conditions.
 Be concise, practical, and objective.
 """
+        # Updated to gemini-3.6-flash
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=prompt
         )
         return response.text
     except Exception as e:
         return f"AI Generation Failed: {str(e)}"
-
 # -------------------------------------------------------------------
 # 6. UI RENDERING & AUTO-REFRESH
 # -------------------------------------------------------------------
