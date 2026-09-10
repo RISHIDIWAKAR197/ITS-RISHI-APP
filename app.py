@@ -4,6 +4,7 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime
 import time
+from PIL import Image
 from google import genai
 from google.genai.errors import APIError
 
@@ -16,25 +17,23 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚡ Dynamic Intraday Signal Screener + AI Trade Analyst")
+st.title("⚡ Dynamic Intraday Signal Screener + AI Chart Assistant")
 st.caption("Strategy: Multi-Bar Breakout + VWAP Alignment + 9/20 EMA + ATR Dynamic Risk Management")
 
 # -------------------------------------------------------------------
-# 2. INTERNAL API KEY RETRIEVAL (Hidden from UI)
+# 2. INTERNAL API KEY CONFIGURATION
 # -------------------------------------------------------------------
-# Checks Streamlit Secrets first, falls back to an internal hardcoded string if needed
 try:
     INTERNAL_GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    # If not using secrets.toml, insert your regenerated key here:
     INTERNAL_GEMINI_API_KEY = "PASTE_YOUR_NEW_KEY_HERE"
 
 # -------------------------------------------------------------------
-# 3. SIDEBAR CONTROLS & RISK MANAGEMENT PARAMETERS
+# 3. SIDEBAR CONTROLS & CHATBOT WITH IMAGE UPLOAD
 # -------------------------------------------------------------------
 st.sidebar.header("⚙️ Screener Controls")
 default_symbols = "RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, LT, SBIN, AXISBANK"
-watchlist_input = st.sidebar.text_area("Watchlist (NSE Tickers)", default_symbols, height=100)
+watchlist_input = st.sidebar.text_area("Watchlist (NSE Tickers)", default_symbols, height=80)
 watchlist = [s.strip().upper() for s in watchlist_input.split(",") if s.strip()]
 
 refresh_rate = st.sidebar.slider("Auto-Refresh Interval (Seconds)", 10, 120, 30)
@@ -43,6 +42,64 @@ st.sidebar.markdown("---")
 st.sidebar.header("🛡️ Risk Management")
 total_capital = st.sidebar.number_input("Total Trading Capital (₹)", value=100000, step=10000)
 risk_per_trade_pct = st.sidebar.slider("Risk Per Trade (%)", 0.5, 3.0, 1.0, 0.25)
+
+st.sidebar.markdown("---")
+st.sidebar.header("💬 AI Chart Auditor & Chat")
+
+# Initialize Chat & Analysis States
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "ai_verdict" not in st.session_state:
+    st.session_state.ai_verdict = None
+
+# Image Uploader in Sidebar
+uploaded_chart = st.sidebar.file_uploader("Upload Stock Chart (PNG/JPG)", type=["png", "jpg", "jpeg"])
+if uploaded_chart:
+    img_preview = Image.open(uploaded_chart)
+    st.sidebar.image(img_preview, caption="Active Chart Context", use_container_width=True)
+
+# Chat History Display
+for role, message in st.session_state.chat_history:
+    with st.sidebar.chat_message(role):
+        st.write(message)
+
+# Chat Input in Sidebar
+user_chat_prompt = st.sidebar.chat_input("Ask Gemini about this chart/setup...")
+if user_chat_prompt:
+    st.session_state.chat_history.append(("user", user_chat_prompt))
+    with st.sidebar.chat_message("user"):
+        st.write(user_chat_prompt)
+
+    # Call Gemini Multimodal with image + query
+    with st.sidebar.chat_message("assistant"):
+        with st.spinner("Analyzing chart patterns..."):
+            try:
+                client = genai.Client(api_key=INTERNAL_GEMINI_API_KEY)
+                
+                content_payload = [
+                    "You are an expert intraday technical price-action trader. "
+                    "Analyze the user query based on technical indicators, chart patterns, support/resistance, and volume."
+                ]
+                
+                if uploaded_chart:
+                    content_payload.append(Image.open(uploaded_chart))
+                
+                content_payload.append(f"User Query: {user_chat_prompt}")
+                
+                response = client.models.generate_content(
+                    model='gemini-3.6-flash',
+                    contents=content_payload
+                )
+                ai_reply = response.text
+            except Exception as e:
+                ai_reply = f"Error generating chart analysis: {str(e)}"
+                
+            st.write(ai_reply)
+            st.session_state.chat_history.append(("assistant", ai_reply))
+
+if st.sidebar.button("Clear Chat History"):
+    st.session_state.chat_history = []
+    st.rerun()
 
 # -------------------------------------------------------------------
 # 4. MARKET DATA FETCHING
@@ -76,7 +133,7 @@ def fetch_live_data(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # -------------------------------------------------------------------
-# 5. STRATEGY ENGINE & TECHNICAL CALCULATIONS
+# 5. STRATEGY ENGINE & INDICATORS
 # -------------------------------------------------------------------
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -149,11 +206,11 @@ def analyze_ticker_signal(df: pd.DataFrame, ticker: str, capital: float, max_ris
     }
 
 # -------------------------------------------------------------------
-# 6. INTERNAL GEMINI AI ANALYSIS (Uses Embedded Key)
+# 6. SCREENER-LEVEL GEMINI AUDIT
 # -------------------------------------------------------------------
 def get_gemini_verdict(active_trades: list) -> str:
     if not INTERNAL_GEMINI_API_KEY or "PASTE_YOUR" in INTERNAL_GEMINI_API_KEY:
-        return "⚠️ Please configure your Gemini API Key in `.streamlit/secrets.toml` or directly in the script."
+        return "⚠️ Please configure your Gemini API Key in `.streamlit/secrets.toml`."
     
     prompt = f"""
 You are a disciplined intraday proprietary desk trader. Analyze these screener setups generated right now:
@@ -190,15 +247,11 @@ Be concise, practical, and objective.
             except Exception:
                 break
 
-    return "⚠️ The Gemini API is currently under heavy load across available endpoints. Please wait 15–30 seconds and click the button again."
+    return "⚠️ The Gemini API is currently experiencing high load. Please try again in 15 seconds."
 
 # -------------------------------------------------------------------
-# 7. UI RENDERING & PERSISTENT AI STATE
+# 7. UI RENDERING & AUTO-REFRESH
 # -------------------------------------------------------------------
-# Initialize session state for persistent Gemini analysis
-if "ai_verdict" not in st.session_state:
-    st.session_state.ai_verdict = None
-
 @st.fragment(run_every=refresh_rate)
 def render_live_signals():
     signals = []
@@ -225,16 +278,13 @@ def render_live_signals():
     
     st.markdown("---")
     st.subheader("🤖 AI Trade Auditor (Gemini)")
-
     if active_candidates:
         if st.button("Generate AI Risk & Probability Audit"):
             with st.spinner("Gemini is auditing active setups..."):
-                # Save the verdict to session_state so the auto-refresher won't wipe it
                 st.session_state.ai_verdict = get_gemini_verdict(active_candidates)
     else:
         st.info("No active BUY or SELL setups currently detected. AI audit will be available when a breakout triggers.")
 
-    # Render persisted verdict if present
     if st.session_state.ai_verdict:
         st.markdown(st.session_state.ai_verdict)
 
