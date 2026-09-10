@@ -3,7 +3,9 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime
+import time
 from google import genai
+from google.genai.errors import APIError
 
 # -------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & STYLING
@@ -18,12 +20,18 @@ st.title("⚡ Dynamic Intraday Signal Screener + AI Trade Analyst")
 st.caption("Strategy: Multi-Bar Breakout + VWAP Alignment + 9/20 EMA + ATR Dynamic Risk Management")
 
 # -------------------------------------------------------------------
-# 2. SIDEBAR CONTROLS & RISK MANAGEMENT
+# 2. INTERNAL API KEY RETRIEVAL (Hidden from UI)
 # -------------------------------------------------------------------
-st.sidebar.header("🔑 API Configuration")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", help="Pass your key here or via secrets.toml")
+# Checks Streamlit Secrets first, falls back to an internal hardcoded string if needed
+try:
+    INTERNAL_GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    # If not using secrets.toml, insert your regenerated key here:
+    INTERNAL_GEMINI_API_KEY = "PASTE_YOUR_NEW_KEY_HERE"
 
-st.sidebar.markdown("---")
+# -------------------------------------------------------------------
+# 3. SIDEBAR CONTROLS & RISK MANAGEMENT PARAMETERS
+# -------------------------------------------------------------------
 st.sidebar.header("⚙️ Screener Controls")
 default_symbols = "RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, LT, SBIN, AXISBANK"
 watchlist_input = st.sidebar.text_area("Watchlist (NSE Tickers)", default_symbols, height=100)
@@ -37,7 +45,7 @@ total_capital = st.sidebar.number_input("Total Trading Capital (₹)", value=100
 risk_per_trade_pct = st.sidebar.slider("Risk Per Trade (%)", 0.5, 3.0, 1.0, 0.25)
 
 # -------------------------------------------------------------------
-# 3. REAL MARKET DATA FETCHING
+# 4. MARKET DATA FETCHING
 # -------------------------------------------------------------------
 def fetch_live_data(ticker: str) -> pd.DataFrame:
     """Fetches intraday 5m data from Yahoo Finance."""
@@ -53,7 +61,6 @@ def fetch_live_data(ticker: str) -> pd.DataFrame:
         )
         
         if df.empty or len(df) < 5:
-            # Fallback to 5 days if market is closed or early pre-open
             df = yf.download(tickers=formatted_ticker, period="5d", interval="5m", progress=False, multi_level_index=False)
             if df.empty:
                 return pd.DataFrame()
@@ -69,7 +76,7 @@ def fetch_live_data(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # -------------------------------------------------------------------
-# 4. STRATEGY ENGINE & TECHNICAL CALCULATIONS
+# 5. STRATEGY ENGINE & TECHNICAL CALCULATIONS
 # -------------------------------------------------------------------
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -93,7 +100,6 @@ def analyze_ticker_signal(df: pd.DataFrame, ticker: str, capital: float, max_ris
         
     df = calculate_indicators(df)
     
-    # Dynamic Range: uses the first 3 bars (15 mins) of available session data
     ref_window = df.iloc[:3]
     ref_high = float(ref_window['High'].max())
     ref_low = float(ref_window['Low'].min())
@@ -143,14 +149,13 @@ def analyze_ticker_signal(df: pd.DataFrame, ticker: str, capital: float, max_ris
     }
 
 # -------------------------------------------------------------------
-# 5. GEMINI AI ANALYSIS FUNCTION
+# 6. INTERNAL GEMINI AI ANALYSIS (Uses Embedded Key)
 # -------------------------------------------------------------------
-def get_gemini_verdict(api_key: str, active_trades: list) -> str:
-    if not api_key:
-        return "Please input your Gemini API Key in the sidebar to generate AI trade insights."
-    try:
-        client = genai.Client(api_key=api_key)
-        prompt = f"""
+def get_gemini_verdict(active_trades: list) -> str:
+    if not INTERNAL_GEMINI_API_KEY or "PASTE_YOUR" in INTERNAL_GEMINI_API_KEY:
+        return "⚠️ Please configure your Gemini API Key in `.streamlit/secrets.toml` or directly in the script."
+    
+    prompt = f"""
 You are a disciplined intraday proprietary desk trader. Analyze these screener setups generated right now:
 {active_trades}
 
@@ -160,16 +165,35 @@ For each active trade setup:
 3. State whether the setup has a high or low probability of false breakouts in typical Indian equity market conditions.
 Be concise, practical, and objective.
 """
-        # Updated to gemini-3.6-flash
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=prompt
-        )
-        return response.text
+    models_to_try = ['gemini-3.6-flash', 'gemini-2.5-pro']
+    
+    try:
+        client = genai.Client(api_key=INTERNAL_GEMINI_API_KEY)
     except Exception as e:
-        return f"AI Generation Failed: {str(e)}"
+        return f"Client initialization failed: {str(e)}"
+
+    for model_name in models_to_try:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                return response.text
+            except APIError as e:
+                if getattr(e, 'code', None) == 503 or "503" in str(e):
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** (attempt + 1))
+                        continue
+                break
+            except Exception:
+                break
+
+    return "⚠️ The Gemini API is currently under heavy load across available endpoints. Please wait 15–30 seconds and click the button again."
+
 # -------------------------------------------------------------------
-# 6. UI RENDERING & AUTO-REFRESH
+# 7. UI RENDERING & AUTO-REFRESH
 # -------------------------------------------------------------------
 @st.fragment(run_every=refresh_rate)
 def render_live_signals():
@@ -193,15 +217,14 @@ def render_live_signals():
     st.subheader(f"Live Screener — {datetime.now().strftime('%H:%M:%S')}")
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
     
-    # Filter for active candidates to show AI breakdown
-    active_candidates = [s for s in signals if s['Signal'] != "NO TRADE / CHOP" and s['Signal'] != "NO DATA"]
+    active_candidates = [s for s in signals if s['Signal'] not in ("NO TRADE / CHOP", "NO DATA")]
     
     st.markdown("---")
     st.subheader("🤖 AI Trade Auditor (Gemini)")
     if active_candidates:
         if st.button("Generate AI Risk & Probability Audit"):
             with st.spinner("Gemini is auditing active setups..."):
-                verdict = get_gemini_verdict(gemini_api_key, active_candidates)
+                verdict = get_gemini_verdict(active_candidates)
                 st.markdown(verdict)
     else:
         st.info("No active BUY or SELL setups currently detected. AI audit will be available when a breakout triggers.")
